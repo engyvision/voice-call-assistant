@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import { Bot, Phone, Sparkles, Bug } from 'lucide-react';
 import CallForm from './components/CallForm';
 import CallStatus from './components/CallStatus';
@@ -14,99 +14,6 @@ function App() {
   const [currentCall, setCurrentCall] = useState<CallRecord | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [callHistoryRefresh, setCallHistoryRefresh] = useState(0);
-  
-  // Use refs to avoid dependency issues
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const currentCallRef = useRef<CallRecord | null>(null);
-  const currentViewRef = useRef<AppView>('form');
-
-  // Update refs when state changes
-  useEffect(() => {
-    currentCallRef.current = currentCall;
-  }, [currentCall]);
-
-  useEffect(() => {
-    currentViewRef.current = currentView;
-  }, [currentView]);
-
-  // Polling function
-  const startPolling = (callId: string) => {
-    // Clear any existing polling
-    stopPolling();
-
-    console.log('Starting polling for call:', callId);
-
-    const poll = async () => {
-      try {
-        // Check if we should still be polling
-        const call = currentCallRef.current;
-        const view = currentViewRef.current;
-        
-        if (!call || view !== 'status' || call.status === 'completed' || call.status === 'failed') {
-          console.log('Stopping polling - conditions not met');
-          stopPolling();
-          return;
-        }
-
-        const response = await getCallStatus(callId);
-        if (response.success && response.data) {
-          setCurrentCall(response.data);
-          
-          // Stop polling if call is completed or failed
-          if (response.data.status === 'completed' || response.data.status === 'failed') {
-            console.log('Call finished, stopping polling');
-            stopPolling();
-          }
-        } else {
-          console.error('Failed to get call status:', response.error);
-        }
-      } catch (error) {
-        console.error('Polling error:', error);
-      }
-    };
-
-    // Start polling every 3 seconds
-    pollingIntervalRef.current = setInterval(poll, 3000);
-
-    // Set timeout to stop polling after 5 minutes
-    timeoutRef.current = setTimeout(() => {
-      console.log('Polling timeout reached');
-      stopPolling();
-      
-      // Mark call as failed if still in progress
-      const call = currentCallRef.current;
-      if (call && call.status !== 'completed' && call.status !== 'failed') {
-        setCurrentCall(prev => prev ? {
-          ...prev,
-          status: 'failed',
-          result: {
-            success: false,
-            message: 'Call timeout',
-            details: 'Call monitoring timed out after 5 minutes'
-          }
-        } : null);
-      }
-    }, 300000); // 5 minutes
-  };
-
-  const stopPolling = () => {
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
-    }
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
-  };
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      stopPolling();
-    };
-  }, []);
 
   const handleCallSubmit = async (request: CallRequest) => {
     setIsLoading(true);
@@ -122,9 +29,6 @@ function App() {
         if (statusResponse.success && statusResponse.data) {
           setCurrentCall(statusResponse.data);
           setCurrentView('status');
-          
-          // Start polling for this call
-          startPolling(response.data);
         } else {
           alert(statusResponse.error || 'Failed to get call status');
         }
@@ -141,27 +45,28 @@ function App() {
   };
 
   const handleCallComplete = () => {
-    stopPolling();
     setCurrentCall(null);
     setCurrentView('form');
     setCallHistoryRefresh(prev => prev + 1);
   };
 
   const handleViewChange = (view: AppView) => {
-    // Stop polling when switching away from status view
-    if (view !== 'status') {
-      stopPolling();
-    }
-    
     setCurrentView(view);
-    
     if (view === 'form') {
       setCurrentCall(null);
     }
-    
-    // If switching back to status view and we have an active call, restart polling
-    if (view === 'status' && currentCall && currentCall.status !== 'completed' && currentCall.status !== 'failed') {
-      startPolling(currentCall.id);
+  };
+
+  const refreshCallStatus = async () => {
+    if (currentCall && currentCall.status !== 'completed' && currentCall.status !== 'failed') {
+      try {
+        const response = await getCallStatus(currentCall.id);
+        if (response.success && response.data) {
+          setCurrentCall(response.data);
+        }
+      } catch (error) {
+        console.error('Failed to refresh call status:', error);
+      }
     }
   };
 
@@ -273,19 +178,11 @@ function App() {
           
           {currentView === 'status' && currentCall && (
             <div className="w-full max-w-2xl">
-              <CallStatus callRecord={currentCall} onComplete={handleCallComplete} />
-              
-              {/* Debug info for call status */}
-              <div className="mt-4 p-4 bg-gray-100 rounded-lg text-sm">
-                <h4 className="font-medium mb-2">Debug Info:</h4>
-                <p>Polling: {pollingIntervalRef.current ? 'Active' : 'Inactive'}</p>
-                <p>Call ID: {currentCall.id}</p>
-                <p>Status: {currentCall.status}</p>
-                <p>Created: {new Date(currentCall.createdAt).toLocaleString()}</p>
-                {currentCall.completedAt && (
-                  <p>Completed: {new Date(currentCall.completedAt).toLocaleString()}</p>
-                )}
-              </div>
+              <CallStatus 
+                callRecord={currentCall} 
+                onComplete={handleCallComplete}
+                onRefresh={refreshCallStatus}
+              />
             </div>
           )}
           
