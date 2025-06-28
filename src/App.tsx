@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
-import { Bot, Phone, Sparkles, Bug } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Bot, Phone, Sparkles, Bug, AlertCircle } from 'lucide-react';
 import CallForm from './components/CallForm';
 import CallStatus from './components/CallStatus';
 import CallHistory from './components/CallHistory';
 import DebugPanel from './components/DebugPanel';
 import { CallRequest, CallRecord } from './types';
 import { initiateCall, getCallStatus } from './utils/realApi';
+import { supabase } from './lib/supabase';
 
 type AppView = 'form' | 'status' | 'history' | 'debug';
 
@@ -14,6 +15,27 @@ function App() {
   const [currentCall, setCurrentCall] = useState<CallRecord | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [callHistoryRefresh, setCallHistoryRefresh] = useState(0);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+
+  // Check Supabase connection on mount
+  useEffect(() => {
+    checkDatabaseConnection();
+  }, []);
+
+  const checkDatabaseConnection = async () => {
+    try {
+      const { error } = await supabase.from('call_records').select('count').limit(1);
+      if (error) {
+        console.error('Database connection error:', error);
+        setConnectionError(`Database connection failed: ${error.message}`);
+      } else {
+        setConnectionError(null);
+      }
+    } catch (error) {
+      console.error('Failed to check database connection:', error);
+      setConnectionError('Unable to connect to database. Please check your Supabase configuration.');
+    }
+  };
 
   const handleCallSubmit = async (request: CallRequest) => {
     setIsLoading(true);
@@ -72,6 +94,25 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
+      {/* Connection Error Banner */}
+      {connectionError && (
+        <div className="bg-red-50 border-b border-red-200 px-4 py-3">
+          <div className="max-w-7xl mx-auto flex items-center">
+            <AlertCircle className="w-5 h-5 text-red-600 mr-3 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="text-red-800 text-sm font-medium">Database Connection Issue</p>
+              <p className="text-red-700 text-sm">{connectionError}</p>
+            </div>
+            <button
+              onClick={checkDatabaseConnection}
+              className="ml-4 px-3 py-1 bg-red-100 text-red-800 text-sm rounded hover:bg-red-200 transition-colors"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="bg-white/80 backdrop-blur-sm border-b border-gray-200 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -209,10 +250,10 @@ function App() {
               <span className="text-blue-600 font-semibold"> Ready for production use.</span>
             </p>
             <div className="flex justify-center items-center space-x-6 mt-4 text-sm text-gray-500">
-              <span>• Twilio Integration Active</span>
-              <span>• Supabase Database Connected</span>
-              <span>• Real-time Call Tracking</span>
-              <span>• Production Ready</span>
+              <span>• Twilio Integration {connectionError ? '❌' : '✅'}</span>
+              <span>• Supabase Database {connectionError ? '❌' : '✅'}</span>
+              <span>• Real-time Call Tracking ✅</span>
+              <span>• Production Ready ✅</span>
             </div>
           </div>
         </div>
