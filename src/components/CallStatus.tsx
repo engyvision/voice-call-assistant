@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { Phone, Clock, CheckCircle, XCircle, PhoneCall, Loader2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { Phone, Clock, CheckCircle, XCircle, PhoneCall, Loader2, RefreshCw } from 'lucide-react';
 import { CallRecord, CallStatus as CallStatusType } from '../types';
 
 interface CallStatusProps {
   callRecord: CallRecord;
   onComplete: () => void;
+  onRefresh?: () => void;
 }
 
 const statusConfig = {
@@ -45,27 +46,8 @@ const statusConfig = {
   }
 };
 
-export default function CallStatus({ callRecord, onComplete }: CallStatusProps) {
-  const [elapsedTime, setElapsedTime] = useState(0);
-  const [isCompleted, setIsCompleted] = useState(false);
-
-  useEffect(() => {
-    if (callRecord.status === 'completed' || callRecord.status === 'failed') {
-      if (!isCompleted) {
-        setIsCompleted(true);
-        setTimeout(onComplete, 2000); // Auto-advance after 2 seconds
-      }
-      return;
-    }
-
-    const interval = setInterval(() => {
-      const now = Date.now();
-      const start = new Date(callRecord.createdAt).getTime();
-      setElapsedTime(Math.floor((now - start) / 1000));
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [callRecord.status, callRecord.createdAt, onComplete, isCompleted]);
+export default function CallStatus({ callRecord, onComplete, onRefresh }: CallStatusProps) {
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const config = statusConfig[callRecord.status];
   const IconComponent = config.icon;
@@ -74,6 +56,24 @@ export default function CallStatus({ callRecord, onComplete }: CallStatusProps) 
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const handleRefresh = async () => {
+    if (onRefresh && !isRefreshing) {
+      setIsRefreshing(true);
+      await onRefresh();
+      setTimeout(() => setIsRefreshing(false), 1000);
+    }
+  };
+
+  const getElapsedTime = () => {
+    if (callRecord.status === 'completed' || callRecord.status === 'failed') {
+      return callRecord.duration;
+    }
+    
+    const now = Date.now();
+    const start = new Date(callRecord.createdAt).getTime();
+    return Math.floor((now - start) / 1000);
   };
 
   return (
@@ -108,13 +108,25 @@ export default function CallStatus({ callRecord, onComplete }: CallStatusProps) 
               <span className="text-gray-500">Duration:</span>
               <p className="font-semibold text-gray-900">
                 <Clock className="inline w-4 h-4 mr-1" />
-                {formatTime(callRecord.status === 'completed' || callRecord.status === 'failed' 
-                  ? callRecord.duration 
-                  : elapsedTime)}
+                {formatTime(getElapsedTime())}
               </p>
             </div>
           </div>
         </div>
+
+        {/* Manual refresh button for active calls */}
+        {callRecord.status !== 'completed' && callRecord.status !== 'failed' && onRefresh && (
+          <div className="mb-6">
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="flex items-center justify-center mx-auto px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`w-4 h-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+              {isRefreshing ? 'Refreshing...' : 'Refresh Status'}
+            </button>
+          </div>
+        )}
 
         {/* Progress bar for active calls */}
         {callRecord.status !== 'completed' && callRecord.status !== 'failed' && (
@@ -181,6 +193,18 @@ export default function CallStatus({ callRecord, onComplete }: CallStatusProps) 
             Make Another Call
           </button>
         )}
+
+        {/* Debug info */}
+        <div className="mt-6 p-4 bg-gray-100 rounded-lg text-sm text-left">
+          <h4 className="font-medium mb-2">Debug Info:</h4>
+          <p><strong>Call ID:</strong> {callRecord.id}</p>
+          <p><strong>Status:</strong> {callRecord.status}</p>
+          <p><strong>Created:</strong> {new Date(callRecord.createdAt).toLocaleString()}</p>
+          {callRecord.completedAt && (
+            <p><strong>Completed:</strong> {new Date(callRecord.completedAt).toLocaleString()}</p>
+          )}
+          <p><strong>Duration:</strong> {callRecord.duration} seconds</p>
+        </div>
       </div>
     </div>
   );
