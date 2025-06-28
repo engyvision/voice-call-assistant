@@ -55,16 +55,31 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    // Parse additional context to get call details
+    let callDetails;
+    try {
+      callDetails = JSON.parse(callRecord.additional_context || '{}');
+    } catch {
+      callDetails = {
+        originalContext: callRecord.additional_context || '',
+        recipientName: callRecord.recipient_name,
+        callGoal: callRecord.call_goal
+      };
+    }
+
     // Generate TwiML based on call goal and context
-    const twiml = generateAITwiML(callRecord);
+    const twiml = generateAITwiML(callRecord, callDetails, callId);
 
     // Update call status in database
     await supabase
       .from('call_records')
       .update({ 
         status: 'in-progress',
-        // Store the Twilio SID for reference
-        additional_context: `${callRecord.additional_context || ''}\n\nTwilio SID: ${callSid}`.trim()
+        // Update additional context with Twilio SID
+        additional_context: JSON.stringify({
+          ...callDetails,
+          twilioSid: callSid
+        })
       })
       .eq('id', callId);
 
@@ -82,16 +97,17 @@ Deno.serve(async (req: Request) => {
   }
 });
 
-function generateAITwiML(callRecord: any): string {
-  const { recipient_name, call_goal, additional_context } = callRecord;
+function generateAITwiML(callRecord: any, callDetails: any, callId: string): string {
+  const { recipient_name, call_goal } = callRecord;
+  const { originalContext } = callDetails;
   
   // Create initial message based on call goal
-  const initialMessage = getInitialMessage(call_goal, recipient_name, additional_context);
+  const initialMessage = getInitialMessage(call_goal, recipient_name, originalContext);
   
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="alice">${initialMessage}</Say>
-  <Gather input="speech" action="${Deno.env.get('SUPABASE_URL')}/functions/v1/twiml-gather?callId=${callRecord.id}" method="POST" speechTimeout="3" timeout="10">
+  <Gather input="speech" action="${Deno.env.get('SUPABASE_URL')}/functions/v1/twiml-gather?callId=${callId}" method="POST" speechTimeout="3" timeout="10">
     <Say voice="alice">Please let me know if you're available to help with this request.</Say>
   </Gather>
   <Say voice="alice">I didn't hear a response. Thank you for your time, and have a great day!</Say>
