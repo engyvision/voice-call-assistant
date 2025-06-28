@@ -12,13 +12,6 @@ const supabase = createClient(
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 );
 
-interface CallData {
-  callId: string;
-  recipientName: string;
-  callGoal: string;
-  additionalContext: string;
-}
-
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -28,19 +21,31 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    // Get callId from URL parameters
+    const url = new URL(req.url);
+    const callId = url.searchParams.get('callId');
+    
+    // Also get Twilio webhook data
     const formData = await req.formData();
     const callSid = formData.get('CallSid') as string;
     const callStatus = formData.get('CallStatus') as string;
     const from = formData.get('From') as string;
     const to = formData.get('To') as string;
 
-    console.log('TwiML webhook called:', { callSid, callStatus, from, to });
+    console.log('TwiML voice webhook called:', { callId, callSid, callStatus, from, to });
 
-    // Get call data from database using CallSid
+    if (!callId) {
+      console.error('No callId provided in webhook URL');
+      return new Response(generateErrorTwiML(), {
+        headers: { 'Content-Type': 'text/xml', ...corsHeaders }
+      });
+    }
+
+    // Get call data from database using our callId
     const { data: callRecord, error } = await supabase
       .from('call_records')
       .select('*')
-      .eq('id', callSid)
+      .eq('id', callId)
       .single();
 
     if (error || !callRecord) {
@@ -56,15 +61,21 @@ Deno.serve(async (req: Request) => {
     // Update call status in database
     await supabase
       .from('call_records')
-      .update({ status: 'in-progress' })
-      .eq('id', callSid);
+      .update({ 
+        status: 'in-progress',
+        // Store the Twilio SID for reference
+        additional_context: `${callRecord.additional_context || ''}\n\nTwilio SID: ${callSid}`.trim()
+      })
+      .eq('id', callId);
+
+    console.log('Generated TwiML for call:', callId);
 
     return new Response(twiml, {
       headers: { 'Content-Type': 'text/xml', ...corsHeaders }
     });
 
   } catch (error) {
-    console.error('TwiML webhook error:', error);
+    console.error('TwiML voice webhook error:', error);
     return new Response(generateErrorTwiML(), {
       headers: { 'Content-Type': 'text/xml', ...corsHeaders }
     });
@@ -74,48 +85,45 @@ Deno.serve(async (req: Request) => {
 function generateAITwiML(callRecord: any): string {
   const { recipient_name, call_goal, additional_context } = callRecord;
   
-  // Create AI prompt based on call goal
-  const aiPrompt = createAIPrompt(call_goal, recipient_name, additional_context);
+  // Create initial message based on call goal
+  const initialMessage = getInitialMessage(call_goal, recipient_name, additional_context);
   
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="alice">
-    Hello, this is an AI assistant calling on behalf of my client. 
-    ${getInitialMessage(call_goal, recipient_name)}
-  </Say>
-  <Gather input="speech" action="/functions/v1/twiml-gather" method="POST" speechTimeout="3" timeout="10">
-    <Say voice="alice">How can I help you today?</Say>
+  <Say voice="alice">${initialMessage}</Say>
+  <Gather input="speech" action="${Deno.env.get('SUPABASE_URL')}/functions/v1/twiml-gather?callId=${callRecord.id}" method="POST" speechTimeout="3" timeout="10">
+    <Say voice="alice">Please let me know if you're available to help with this request.</Say>
   </Gather>
-  <Say voice="alice">I didn't hear a response. Let me try again.</Say>
-  <Redirect>/functions/v1/twiml-voice</Redirect>
+  <Say voice="alice">I didn't hear a response. Thank you for your time, and have a great day!</Say>
+  <Hangup/>
 </Response>`;
 }
 
-function getInitialMessage(callGoal: string, recipientName: string): string {
+function getInitialMessage(callGoal: string, recipientName: string, additionalContext: string): string {
+  const baseMessage = `Hello, this is an AI assistant calling on behalf of my client.`;
+  
   switch (callGoal.toLowerCase()) {
     case 'book appointment':
-      return `I'd like to schedule an appointment for my client. Is this ${recipientName}?`;
+      return `${baseMessage} I'd like to schedule an appointment. ${additionalContext ? additionalContext : 'Is this a good time to discuss availability?'}`;
     case 'make reservation':
-      return `I'd like to make a reservation. Am I speaking with ${recipientName}?`;
+      return `${baseMessage} I'd like to make a reservation. ${additionalContext ? additionalContext : 'Can you help me with this?'}`;
     case 'get information':
-      return `I'm calling to get some information. Is this ${recipientName}?`;
+      return `${baseMessage} I'm calling to get some information. ${additionalContext ? additionalContext : 'Do you have a moment to help?'}`;
+    case 'follow up inquiry':
+      return `${baseMessage} I'm following up on a previous inquiry. ${additionalContext ? additionalContext : 'Can we discuss this briefly?'}`;
+    case 'schedule consultation':
+      return `${baseMessage} I'd like to schedule a consultation. ${additionalContext ? additionalContext : 'What times work best for you?'}`;
+    case 'request quote':
+      return `${baseMessage} I'm calling to request a quote for services. ${additionalContext ? additionalContext : 'Can you help me with pricing information?'}`;
     default:
-      return `I'm calling regarding a request for my client. Is this ${recipientName}?`;
+      return `${baseMessage} ${additionalContext || 'I have a request to discuss with you. Do you have a moment?'}`;
   }
-}
-
-function createAIPrompt(callGoal: string, recipientName: string, context: string): string {
-  return `You are a professional AI assistant making a phone call. 
-Goal: ${callGoal}
-Recipient: ${recipientName}
-Context: ${context}
-Be polite, professional, and focused on achieving the goal.`;
 }
 
 function generateErrorTwiML(): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="alice">I apologize, but there seems to be a technical issue. Please try calling back later.</Say>
+  <Say voice="alice">I apologize, but there seems to be a technical issue with this call. Please try calling back later. Thank you.</Say>
   <Hangup/>
 </Response>`;
 }

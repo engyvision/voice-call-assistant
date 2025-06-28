@@ -107,18 +107,39 @@ Deno.serve(async (req: Request) => {
     const targetCountry = getCountryFromPhoneNumber(phoneNumber);
     console.log('Target country detected:', targetCountry);
 
-    // Create Twilio call
+    // Initialize Supabase client
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    );
+
+    // Store call details in the database for webhook access
+    await supabase
+      .from('call_records')
+      .update({
+        recipient_name: recipientName,
+        phone_number: phoneNumber,
+        call_goal: callGoal,
+        additional_context: additionalContext || ''
+      })
+      .eq('id', callId);
+
+    // Create Twilio call with proper webhook URLs
     const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls.json`;
+    const supabaseUrl = Deno.env.get('SUPABASE_URL');
     
     const formData = new URLSearchParams();
     formData.append('To', phoneNumber);
     formData.append('From', TWILIO_PHONE_NUMBER);
-    formData.append('Url', `${Deno.env.get('SUPABASE_URL')}/functions/v1/twiml-voice`);
-    formData.append('StatusCallback', `${Deno.env.get('SUPABASE_URL')}/functions/v1/twiml-status`);
+    // Use the call ID as a parameter to identify the call in webhooks
+    formData.append('Url', `${supabaseUrl}/functions/v1/twiml-voice?callId=${callId}`);
+    formData.append('StatusCallback', `${supabaseUrl}/functions/v1/twiml-status?callId=${callId}`);
     formData.append('StatusCallbackEvent', 'initiated,ringing,answered,completed');
     formData.append('StatusCallbackMethod', 'POST');
     
     console.log('Making Twilio API request to:', twilioUrl);
+    console.log('TwiML URL:', `${supabaseUrl}/functions/v1/twiml-voice?callId=${callId}`);
+    console.log('Status callback URL:', `${supabaseUrl}/functions/v1/twiml-status?callId=${callId}`);
     
     const response = await fetch(twilioUrl, {
       method: 'POST',
@@ -154,11 +175,6 @@ Original error: ${message}`;
       }
       
       // Update call record with error status
-      const supabase = createClient(
-        Deno.env.get('SUPABASE_URL') ?? '',
-        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-      );
-
       await supabase
         .from('call_records')
         .update({ 
@@ -183,18 +199,13 @@ Original error: ${message}`;
     const callData = await response.json();
     console.log('Twilio call created successfully:', callData.sid);
     
-    // Update call record with Twilio SID
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
-
+    // Update call record with Twilio SID and status
     const { error: updateError } = await supabase
       .from('call_records')
       .update({ 
         status: 'dialing',
-        // Store Twilio SID for reference
-        additional_context: `${additionalContext || ''}\n\nTwilio SID: ${callData.sid}`
+        // Store Twilio SID in additional context for reference
+        additional_context: `${additionalContext || ''}\n\nTwilio SID: ${callData.sid}`.trim()
       })
       .eq('id', callId);
 
@@ -216,13 +227,13 @@ Original error: ${message}`;
     
     // Update call record with error status
     try {
-      const supabase = createClient(
-        Deno.env.get('SUPABASE_URL') ?? '',
-        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-      );
-
       const { callId } = await req.json();
       if (callId) {
+        const supabase = createClient(
+          Deno.env.get('SUPABASE_URL') ?? '',
+          Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+        );
+
         await supabase
           .from('call_records')
           .update({ 
