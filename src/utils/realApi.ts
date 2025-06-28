@@ -1,9 +1,44 @@
 import { CallRequest, CallRecord, ApiResponse } from '../types';
 import { supabase } from '../lib/supabase';
 
+// Add connection health check
+let connectionHealthy = false;
+let lastHealthCheck = 0;
+
+async function checkSupabaseConnection(): Promise<boolean> {
+  const now = Date.now();
+  
+  // Only check every 30 seconds to avoid excessive requests
+  if (connectionHealthy && (now - lastHealthCheck) < 30000) {
+    return true;
+  }
+
+  try {
+    const { error } = await supabase.from('call_records').select('count').limit(1);
+    connectionHealthy = !error;
+    lastHealthCheck = now;
+    
+    if (error) {
+      console.warn('Supabase connection issue:', error.message);
+    }
+    
+    return connectionHealthy;
+  } catch (error) {
+    console.error('Supabase connection check failed:', error);
+    connectionHealthy = false;
+    return false;
+  }
+}
+
 // Real API implementation to replace mockApi.ts
 export async function initiateCall(request: CallRequest): Promise<ApiResponse<string>> {
   try {
+    // Check connection health first
+    const isHealthy = await checkSupabaseConnection();
+    if (!isHealthy) {
+      return { success: false, error: 'Database connection unavailable. Please check your Supabase configuration.' };
+    }
+
     // First, create call record in Supabase
     const { data: callRecord, error: createError } = await supabase
       .from('call_records')
@@ -114,6 +149,12 @@ export async function initiateCall(request: CallRequest): Promise<ApiResponse<st
 
 export async function getCallStatus(callId: string): Promise<ApiResponse<CallRecord>> {
   try {
+    // Check connection health first
+    const isHealthy = await checkSupabaseConnection();
+    if (!isHealthy) {
+      return { success: false, error: 'Database connection unavailable' };
+    }
+
     const { data, error } = await supabase
       .from('call_records')
       .select('*')
@@ -191,6 +232,12 @@ export async function getCallStatus(callId: string): Promise<ApiResponse<CallRec
 
 export async function getAllCalls(): Promise<ApiResponse<CallRecord[]>> {
   try {
+    // Check connection health first
+    const isHealthy = await checkSupabaseConnection();
+    if (!isHealthy) {
+      return { success: false, error: 'Database connection unavailable' };
+    }
+
     const { data, error } = await supabase
       .from('call_records')
       .select('*')
