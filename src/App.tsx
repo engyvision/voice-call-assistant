@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Bot, Phone, Sparkles, Bug } from 'lucide-react';
 import CallForm from './components/CallForm';
 import CallStatus from './components/CallStatus';
@@ -14,47 +14,69 @@ function App() {
   const [currentCall, setCurrentCall] = useState<CallRecord | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [callHistoryRefresh, setCallHistoryRefresh] = useState(0);
-  const [pollingEnabled, setPollingEnabled] = useState(false);
+  
+  // Use refs to avoid dependency issues
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const currentCallRef = useRef<CallRecord | null>(null);
+  const currentViewRef = useRef<AppView>('form');
 
-  // Poll for call status updates when a call is active - with better error handling
+  // Update refs when state changes
   useEffect(() => {
-    if (!currentCall || !pollingEnabled || currentCall.status === 'completed' || currentCall.status === 'failed') {
-      return;
-    }
+    currentCallRef.current = currentCall;
+  }, [currentCall]);
 
-    const interval = setInterval(async () => {
+  useEffect(() => {
+    currentViewRef.current = currentView;
+  }, [currentView]);
+
+  // Polling function
+  const startPolling = (callId: string) => {
+    // Clear any existing polling
+    stopPolling();
+
+    console.log('Starting polling for call:', callId);
+
+    const poll = async () => {
       try {
-        const response = await getCallStatus(currentCall.id);
+        // Check if we should still be polling
+        const call = currentCallRef.current;
+        const view = currentViewRef.current;
+        
+        if (!call || view !== 'status' || call.status === 'completed' || call.status === 'failed') {
+          console.log('Stopping polling - conditions not met');
+          stopPolling();
+          return;
+        }
+
+        const response = await getCallStatus(callId);
         if (response.success && response.data) {
           setCurrentCall(response.data);
           
           // Stop polling if call is completed or failed
           if (response.data.status === 'completed' || response.data.status === 'failed') {
-            setPollingEnabled(false);
+            console.log('Call finished, stopping polling');
+            stopPolling();
           }
         } else {
           console.error('Failed to get call status:', response.error);
-          // Don't stop polling on single error, but log it
         }
       } catch (error) {
         console.error('Polling error:', error);
-        // Don't stop polling on network errors
       }
-    }, 3000); // Increased to 3 seconds to reduce load
+    };
 
-    return () => clearInterval(interval);
-  }, [currentCall, pollingEnabled]);
+    // Start polling every 3 seconds
+    pollingIntervalRef.current = setInterval(poll, 3000);
 
-  // Auto-stop polling after 5 minutes to prevent infinite polling
-  useEffect(() => {
-    if (!pollingEnabled) return;
-
-    const timeout = setTimeout(() => {
-      console.log('Auto-stopping polling after 5 minutes');
-      setPollingEnabled(false);
+    // Set timeout to stop polling after 5 minutes
+    timeoutRef.current = setTimeout(() => {
+      console.log('Polling timeout reached');
+      stopPolling();
       
       // Mark call as failed if still in progress
-      if (currentCall && currentCall.status !== 'completed' && currentCall.status !== 'failed') {
+      const call = currentCallRef.current;
+      if (call && call.status !== 'completed' && call.status !== 'failed') {
         setCurrentCall(prev => prev ? {
           ...prev,
           status: 'failed',
@@ -66,9 +88,25 @@ function App() {
         } : null);
       }
     }, 300000); // 5 minutes
+  };
 
-    return () => clearTimeout(timeout);
-  }, [pollingEnabled, currentCall]);
+  const stopPolling = () => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      stopPolling();
+    };
+  }, []);
 
   const handleCallSubmit = async (request: CallRequest) => {
     setIsLoading(true);
@@ -84,7 +122,9 @@ function App() {
         if (statusResponse.success && statusResponse.data) {
           setCurrentCall(statusResponse.data);
           setCurrentView('status');
-          setPollingEnabled(true); // Enable polling only after successful call initiation
+          
+          // Start polling for this call
+          startPolling(response.data);
         } else {
           alert(statusResponse.error || 'Failed to get call status');
         }
@@ -101,22 +141,27 @@ function App() {
   };
 
   const handleCallComplete = () => {
+    stopPolling();
     setCurrentCall(null);
-    setPollingEnabled(false);
     setCurrentView('form');
     setCallHistoryRefresh(prev => prev + 1);
   };
 
   const handleViewChange = (view: AppView) => {
-    // Stop polling when switching views
+    // Stop polling when switching away from status view
     if (view !== 'status') {
-      setPollingEnabled(false);
+      stopPolling();
     }
     
     setCurrentView(view);
     
     if (view === 'form') {
       setCurrentCall(null);
+    }
+    
+    // If switching back to status view and we have an active call, restart polling
+    if (view === 'status' && currentCall && currentCall.status !== 'completed' && currentCall.status !== 'failed') {
+      startPolling(currentCall.id);
     }
   };
 
@@ -233,7 +278,7 @@ function App() {
               {/* Debug info for call status */}
               <div className="mt-4 p-4 bg-gray-100 rounded-lg text-sm">
                 <h4 className="font-medium mb-2">Debug Info:</h4>
-                <p>Polling: {pollingEnabled ? 'Active' : 'Inactive'}</p>
+                <p>Polling: {pollingIntervalRef.current ? 'Active' : 'Inactive'}</p>
                 <p>Call ID: {currentCall.id}</p>
                 <p>Status: {currentCall.status}</p>
                 <p>Created: {new Date(currentCall.createdAt).toLocaleString()}</p>
