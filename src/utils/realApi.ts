@@ -1,23 +1,36 @@
 import { CallRequest, CallRecord, ApiResponse } from '../types';
+import { supabase } from '../lib/supabase';
 
 // Real API implementation to replace mockApi.ts
 export async function initiateCall(request: CallRequest): Promise<ApiResponse<string>> {
   try {
     // First, create call record in Supabase
-    const callRecord = await createCallRecord(request);
-    
-    if (!callRecord.success || !callRecord.data) {
+    const { data: callRecord, error: createError } = await supabase
+      .from('call_records')
+      .insert({
+        recipient_name: request.recipientName,
+        phone_number: request.phoneNumber,
+        call_goal: request.callGoal,
+        additional_context: request.additionalContext,
+        status: 'preparing'
+      })
+      .select()
+      .single();
+
+    if (createError || !callRecord) {
+      console.error('Failed to create call record:', createError);
       return { success: false, error: 'Failed to create call record' };
     }
 
-    // Then initiate Twilio call
-    const twilioResponse = await fetch('/api/twilio/initiate-call', {
+    // Then initiate Twilio call via edge function
+    const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/twilio-initiate`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
       },
       body: JSON.stringify({
-        callId: callRecord.data.id,
+        callId: callRecord.id,
         phoneNumber: request.phoneNumber,
         recipientName: request.recipientName,
         callGoal: request.callGoal,
@@ -25,15 +38,21 @@ export async function initiateCall(request: CallRequest): Promise<ApiResponse<st
       })
     });
 
-    if (!twilioResponse.ok) {
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Failed to initiate call:', errorText);
       return { success: false, error: 'Failed to initiate call' };
     }
 
-    const result = await twilioResponse.json();
+    const result = await response.json();
     
+    if (!result.success) {
+      return { success: false, error: result.error || 'Failed to initiate call' };
+    }
+
     return {
       success: true,
-      data: callRecord.data.id
+      data: callRecord.id
     };
 
   } catch (error) {
@@ -42,60 +61,43 @@ export async function initiateCall(request: CallRequest): Promise<ApiResponse<st
   }
 }
 
-async function createCallRecord(request: CallRequest): Promise<ApiResponse<CallRecord>> {
-  try {
-    const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/rest/v1/call_records`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-        'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY
-      },
-      body: JSON.stringify({
-        recipient_name: request.recipientName,
-        phone_number: request.phoneNumber,
-        call_goal: request.callGoal,
-        additional_context: request.additionalContext,
-        status: 'preparing'
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error('Failed to create call record');
-    }
-
-    const data = await response.json();
-    return { success: true, data: data[0] };
-
-  } catch (error) {
-    console.error('Create call record error:', error);
-    return { success: false, error: 'Failed to create call record' };
-  }
-}
-
 export async function getCallStatus(callId: string): Promise<ApiResponse<CallRecord>> {
   try {
-    const response = await fetch(
-      `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/call_records?id=eq.${callId}&select=*`,
-      {
-        headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY
-        }
-      }
-    );
+    const { data, error } = await supabase
+      .from('call_records')
+      .select('*')
+      .eq('id', callId)
+      .single();
 
-    if (!response.ok) {
-      throw new Error('Failed to get call status');
+    if (error) {
+      console.error('Failed to get call status:', error);
+      return { success: false, error: 'Failed to get call status' };
     }
 
-    const data = await response.json();
-    
-    if (data.length === 0) {
+    if (!data) {
       return { success: false, error: 'Call not found' };
     }
 
-    return { success: true, data: data[0] };
+    // Transform database record to match CallRecord interface
+    const callRecord: CallRecord = {
+      id: data.id,
+      recipientName: data.recipient_name,
+      phoneNumber: data.phone_number,
+      callGoal: data.call_goal,
+      additionalContext: data.additional_context || '',
+      status: data.status,
+      result: data.result_success !== null ? {
+        success: data.result_success,
+        message: data.result_message || '',
+        details: data.result_details || '',
+        transcript: data.result_transcript || ''
+      } : null,
+      createdAt: data.created_at,
+      completedAt: data.completed_at,
+      duration: data.duration || 0
+    };
+
+    return { success: true, data: callRecord };
 
   } catch (error) {
     console.error('Get call status error:', error);
@@ -105,25 +107,45 @@ export async function getCallStatus(callId: string): Promise<ApiResponse<CallRec
 
 export async function getAllCalls(): Promise<ApiResponse<CallRecord[]>> {
   try {
-    const response = await fetch(
-      `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/call_records?select=*&order=created_at.desc`,
-      {
-        headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY
-        }
-      }
-    );
+    const { data, error } = await supabase
+      .from('call_records')
+      .select('*')
+      .order('created_at', { ascending: false });
 
-    if (!response.ok) {
-      throw new Error('Failed to get calls');
+    if (error) {
+      console.error('Failed to get calls:', error);
+      return { success: false, error: 'Failed to get calls' };
     }
 
-    const data = await response.json();
-    return { success: true, data };
+    // Transform database records to match CallRecord interface
+    const callRecords: CallRecord[] = data.map(record => ({
+      id: record.id,
+      recipientName: record.recipient_name,
+      phoneNumber: record.phone_number,
+      callGoal: record.call_goal,
+      additionalContext: record.additional_context || '',
+      status: record.status,
+      result: record.result_success !== null ? {
+        success: record.result_success,
+        message: record.result_message || '',
+        details: record.result_details || '',
+        transcript: record.result_transcript || ''
+      } : null,
+      createdAt: record.created_at,
+      completedAt: record.completed_at,
+      duration: record.duration || 0
+    }));
+
+    return { success: true, data: callRecords };
 
   } catch (error) {
     console.error('Get all calls error:', error);
     return { success: false, error: 'Failed to get calls' };
   }
+}
+
+// Keep the mock simulation function for development/testing
+export function simulateCallProgress(callId: string): void {
+  // This function is no longer needed as real calls will update via webhooks
+  console.log('Real call initiated, progress will be tracked via Twilio webhooks');
 }

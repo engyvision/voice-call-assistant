@@ -4,7 +4,7 @@ import CallForm from './components/CallForm';
 import CallStatus from './components/CallStatus';
 import CallHistory from './components/CallHistory';
 import { CallRequest, CallRecord } from './types';
-import { initiateCall, getCallStatus, simulateCallProgress } from './utils/mockApi';
+import { initiateCall, getCallStatus } from './utils/realApi';
 
 type AppView = 'form' | 'status' | 'history';
 
@@ -48,14 +48,14 @@ function App() {
         if (statusResponse.success && statusResponse.data) {
           setCurrentCall(statusResponse.data);
           setCurrentView('status');
-          
-          // Start the mock call progression
-          simulateCallProgress(response.data);
         }
+      } else {
+        // Show error to user
+        alert(response.error || 'Failed to initiate call');
       }
     } catch (error) {
       console.error('Failed to initiate call:', error);
-      // TODO: Show error message to user
+      alert('Failed to initiate call. Please check your configuration.');
     } finally {
       setIsLoading(false);
     }
@@ -187,13 +187,13 @@ function App() {
           <div className="text-center">
             <p className="text-gray-600">
               Built with modern AI technology. 
-              <span className="text-blue-600 font-semibold"> Ready to integrate with real APIs.</span>
+              <span className="text-blue-600 font-semibold"> Ready for production use.</span>
             </p>
             <div className="flex justify-center items-center space-x-6 mt-4 text-sm text-gray-500">
-              <span>• Twilio Integration Ready</span>
-              <span>• ElevenLabs Voice Synthesis</span>
-              <span>• OpenAI/Claude Intelligence</span>
-              <span>• Supabase Database</span>
+              <span>• Twilio Integration Active</span>
+              <span>• Supabase Database Connected</span>
+              <span>• Real-time Call Tracking</span>
+              <span>• Production Ready</span>
             </div>
           </div>
         </div>

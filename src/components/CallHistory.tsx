@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { History, Phone, Clock, CheckCircle, XCircle, Filter, Search, ChevronDown } from 'lucide-react';
 import { CallRecord } from '../types';
-import { getAllCalls } from '../utils/mockApi';
+import { getAllCalls } from '../utils/realApi';
 
 interface CallHistoryProps {
   onCallSelect?: (call: CallRecord) => void;
@@ -203,7 +203,10 @@ export default function CallHistory({ onCallSelect, refreshTrigger }: CallHistor
                     </div>
                     <div>
                       <span className="text-gray-500">Duration:</span>
-                      <p className="font-medium text-gray-900">{formatDuration(call.duration)}</p>
+                      <p className="font-medium text-gray-900">
+                        <Clock className="inline w-4 h-4 mr-1" />
+                        {formatDuration(call.duration)}
+                      </p>
                     </div>
                   </div>
                   
@@ -222,6 +225,14 @@ export default function CallHistory({ onCallSelect, refreshTrigger }: CallHistor
                       </p>
                       {call.result.details && (
                         <p className="text-sm text-gray-600">{call.result.details}</p>
+                      )}
+                      {call.result.transcript && (
+                        <div className="mt-3">
+                          <h5 className="font-medium text-gray-700 mb-1">Transcript:</h5>
+                          <div className="bg-gray-50 p-2 rounded text-xs text-gray-600 font-mono whitespace-pre-line max-h-32 overflow-y-auto">
+                            {call.result.transcript}
+                          </div>
+                        </div>
                       )}
                     </div>
                   )}
