@@ -103,15 +103,15 @@ Deno.serve(async (req: Request) => {
 
     console.log('Initiating call for:', { callId, phoneNumber, recipientName });
 
-    // Get country information for better error messages
-    const targetCountry = getCountryFromPhoneNumber(phoneNumber);
-    console.log('Target country detected:', targetCountry);
-
     // Initialize Supabase client
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
+
+    // Get country information for better error messages
+    const targetCountry = getCountryFromPhoneNumber(phoneNumber);
+    console.log('Target country detected:', targetCountry);
 
     // Create Twilio call with proper webhook URLs
     const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls.json`;
@@ -123,8 +123,10 @@ Deno.serve(async (req: Request) => {
     // Use the call ID as a parameter to identify the call in webhooks
     formData.append('Url', `${supabaseUrl}/functions/v1/twiml-voice?callId=${callId}`);
     formData.append('StatusCallback', `${supabaseUrl}/functions/v1/twiml-status?callId=${callId}`);
-    formData.append('StatusCallbackEvent', 'initiated,ringing,answered,completed');
+    formData.append('StatusCallbackEvent', 'initiated,ringing,answered,completed,failed,busy,no-answer');
     formData.append('StatusCallbackMethod', 'POST');
+    formData.append('Timeout', '30'); // 30 second timeout for ringing
+    formData.append('Record', 'false'); // Don't record calls for privacy
     
     console.log('Making Twilio API request to:', twilioUrl);
     console.log('TwiML URL:', `${supabaseUrl}/functions/v1/twiml-voice?callId=${callId}`);
@@ -170,7 +172,8 @@ Original error: ${message}`;
           status: 'failed',
           result_success: false,
           result_message: isGeoPermissionError ? 'Geographic permissions required' : 'Call initiation failed',
-          result_details: errorMessage
+          result_details: errorMessage,
+          completed_at: new Date().toISOString()
         })
         .eq('id', callId);
       
@@ -208,6 +211,34 @@ Original error: ${message}`;
       // Don't fail the entire request if database update fails
     }
 
+    // Set up a server-side timeout to mark call as failed if no status updates come
+    setTimeout(async () => {
+      try {
+        const { data: currentCall } = await supabase
+          .from('call_records')
+          .select('status')
+          .eq('id', callId)
+          .single();
+        
+        // If call is still in dialing state after 90 seconds, mark as failed
+        if (currentCall && currentCall.status === 'dialing') {
+          console.log('Server-side call timeout - marking as failed:', callId);
+          await supabase
+            .from('call_records')
+            .update({ 
+              status: 'failed',
+              result_success: false,
+              result_message: 'Call timeout',
+              result_details: 'The call did not connect within the expected timeframe. The number may be invalid, unreachable, or not answering.',
+              completed_at: new Date().toISOString()
+            })
+            .eq('id', callId);
+        }
+      } catch (error) {
+        console.error('Error in server-side timeout handler:', error);
+      }
+    }, 90000); // 90 seconds timeout
+
     return new Response(JSON.stringify({ 
       success: true, 
       twilioSid: callData.sid,
@@ -234,7 +265,8 @@ Original error: ${message}`;
             status: 'failed',
             result_success: false,
             result_message: 'Internal server error',
-            result_details: error.message
+            result_details: error.message,
+            completed_at: new Date().toISOString()
           })
           .eq('id', callId);
       }

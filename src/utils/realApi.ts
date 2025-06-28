@@ -41,14 +41,65 @@ export async function initiateCall(request: CallRequest): Promise<ApiResponse<st
     if (!response.ok) {
       const errorText = await response.text();
       console.error('Failed to initiate call:', errorText);
+      
+      // Update call record with error status
+      await supabase
+        .from('call_records')
+        .update({ 
+          status: 'failed',
+          result_success: false,
+          result_message: 'Failed to initiate call',
+          result_details: errorText
+        })
+        .eq('id', callRecord.id);
+      
       return { success: false, error: 'Failed to initiate call' };
     }
 
     const result = await response.json();
     
     if (!result.success) {
+      // Update call record with error status
+      await supabase
+        .from('call_records')
+        .update({ 
+          status: 'failed',
+          result_success: false,
+          result_message: 'Call initiation failed',
+          result_details: result.error || 'Unknown error'
+        })
+        .eq('id', callRecord.id);
+      
       return { success: false, error: result.error || 'Failed to initiate call' };
     }
+
+    // Set up a timeout to mark call as failed if it stays in dialing too long
+    setTimeout(async () => {
+      try {
+        const { data: currentCall } = await supabase
+          .from('call_records')
+          .select('status')
+          .eq('id', callRecord.id)
+          .single();
+        
+        // If call is still in dialing or preparing state after 2 minutes, mark as failed
+        if (currentCall && (currentCall.status === 'dialing' || currentCall.status === 'preparing')) {
+          console.log('Call timeout - marking as failed:', callRecord.id);
+          await supabase
+            .from('call_records')
+            .update({ 
+              status: 'failed',
+              result_success: false,
+              result_message: 'Call timeout',
+              result_details: 'The call did not connect within the expected timeframe. This could be due to network issues, invalid number, or the recipient not answering.',
+              completed_at: new Date().toISOString()
+            })
+            .eq('id', callRecord.id);
+        }
+      } catch (error) {
+        console.error('Error in call timeout handler:', error);
+      }
+    }, 120000); // 2 minutes timeout
 
     return {
       success: true,
@@ -76,6 +127,39 @@ export async function getCallStatus(callId: string): Promise<ApiResponse<CallRec
 
     if (!data) {
       return { success: false, error: 'Call not found' };
+    }
+
+    // Check if call has been in dialing state too long and mark as failed
+    if (data.status === 'dialing' || data.status === 'preparing') {
+      const createdAt = new Date(data.created_at).getTime();
+      const now = Date.now();
+      const timeDiff = now - createdAt;
+      
+      // If more than 2 minutes have passed, mark as failed
+      if (timeDiff > 120000) {
+        console.log('Call has been dialing too long, marking as failed:', callId);
+        
+        const { data: updatedData } = await supabase
+          .from('call_records')
+          .update({ 
+            status: 'failed',
+            result_success: false,
+            result_message: 'Call timeout',
+            result_details: 'The call did not connect within the expected timeframe.',
+            completed_at: new Date().toISOString()
+          })
+          .eq('id', callId)
+          .select()
+          .single();
+        
+        if (updatedData) {
+          data.status = updatedData.status;
+          data.result_success = updatedData.result_success;
+          data.result_message = updatedData.result_message;
+          data.result_details = updatedData.result_details;
+          data.completed_at = updatedData.completed_at;
+        }
+      }
     }
 
     // Transform database record to match CallRecord interface
