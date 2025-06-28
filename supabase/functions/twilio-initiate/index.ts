@@ -113,17 +113,6 @@ Deno.serve(async (req: Request) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // Store call details in the database for webhook access
-    await supabase
-      .from('call_records')
-      .update({
-        recipient_name: recipientName,
-        phone_number: phoneNumber,
-        call_goal: callGoal,
-        additional_context: additionalContext || ''
-      })
-      .eq('id', callId);
-
     // Create Twilio call with proper webhook URLs
     const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls.json`;
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
@@ -204,8 +193,13 @@ Original error: ${message}`;
       .from('call_records')
       .update({ 
         status: 'dialing',
-        // Store Twilio SID in additional context for reference
-        additional_context: `${additionalContext || ''}\n\nTwilio SID: ${callData.sid}`.trim()
+        // Store Twilio SID and call details for webhook access
+        additional_context: JSON.stringify({
+          originalContext: additionalContext || '',
+          twilioSid: callData.sid,
+          recipientName: recipientName,
+          callGoal: callGoal
+        })
       })
       .eq('id', callId);
 
