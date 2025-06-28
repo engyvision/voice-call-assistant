@@ -14,10 +14,11 @@ function App() {
   const [currentCall, setCurrentCall] = useState<CallRecord | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [callHistoryRefresh, setCallHistoryRefresh] = useState(0);
+  const [pollingEnabled, setPollingEnabled] = useState(false);
 
-  // Poll for call status updates when a call is active
+  // Poll for call status updates when a call is active - with better error handling
   useEffect(() => {
-    if (!currentCall || currentCall.status === 'completed' || currentCall.status === 'failed') {
+    if (!currentCall || !pollingEnabled || currentCall.status === 'completed' || currentCall.status === 'failed') {
       return;
     }
 
@@ -26,14 +27,48 @@ function App() {
         const response = await getCallStatus(currentCall.id);
         if (response.success && response.data) {
           setCurrentCall(response.data);
+          
+          // Stop polling if call is completed or failed
+          if (response.data.status === 'completed' || response.data.status === 'failed') {
+            setPollingEnabled(false);
+          }
+        } else {
+          console.error('Failed to get call status:', response.error);
+          // Don't stop polling on single error, but log it
         }
       } catch (error) {
-        console.error('Failed to get call status:', error);
+        console.error('Polling error:', error);
+        // Don't stop polling on network errors
       }
-    }, 2000);
+    }, 3000); // Increased to 3 seconds to reduce load
 
     return () => clearInterval(interval);
-  }, [currentCall]);
+  }, [currentCall, pollingEnabled]);
+
+  // Auto-stop polling after 5 minutes to prevent infinite polling
+  useEffect(() => {
+    if (!pollingEnabled) return;
+
+    const timeout = setTimeout(() => {
+      console.log('Auto-stopping polling after 5 minutes');
+      setPollingEnabled(false);
+      
+      // Mark call as failed if still in progress
+      if (currentCall && currentCall.status !== 'completed' && currentCall.status !== 'failed') {
+        setCurrentCall(prev => prev ? {
+          ...prev,
+          status: 'failed',
+          result: {
+            success: false,
+            message: 'Call timeout',
+            details: 'Call monitoring timed out after 5 minutes'
+          }
+        } : null);
+      }
+    }, 300000); // 5 minutes
+
+    return () => clearTimeout(timeout);
+  }, [pollingEnabled, currentCall]);
 
   const handleCallSubmit = async (request: CallRequest) => {
     setIsLoading(true);
@@ -49,6 +84,9 @@ function App() {
         if (statusResponse.success && statusResponse.data) {
           setCurrentCall(statusResponse.data);
           setCurrentView('status');
+          setPollingEnabled(true); // Enable polling only after successful call initiation
+        } else {
+          alert(statusResponse.error || 'Failed to get call status');
         }
       } else {
         // Show error to user
@@ -64,12 +102,19 @@ function App() {
 
   const handleCallComplete = () => {
     setCurrentCall(null);
+    setPollingEnabled(false);
     setCurrentView('form');
     setCallHistoryRefresh(prev => prev + 1);
   };
 
   const handleViewChange = (view: AppView) => {
+    // Stop polling when switching views
+    if (view !== 'status') {
+      setPollingEnabled(false);
+    }
+    
     setCurrentView(view);
+    
     if (view === 'form') {
       setCurrentCall(null);
     }
@@ -182,7 +227,21 @@ function App() {
           )}
           
           {currentView === 'status' && currentCall && (
-            <CallStatus callRecord={currentCall} onComplete={handleCallComplete} />
+            <div className="w-full max-w-2xl">
+              <CallStatus callRecord={currentCall} onComplete={handleCallComplete} />
+              
+              {/* Debug info for call status */}
+              <div className="mt-4 p-4 bg-gray-100 rounded-lg text-sm">
+                <h4 className="font-medium mb-2">Debug Info:</h4>
+                <p>Polling: {pollingEnabled ? 'Active' : 'Inactive'}</p>
+                <p>Call ID: {currentCall.id}</p>
+                <p>Status: {currentCall.status}</p>
+                <p>Created: {new Date(currentCall.createdAt).toLocaleString()}</p>
+                {currentCall.completedAt && (
+                  <p>Completed: {new Date(currentCall.completedAt).toLocaleString()}</p>
+                )}
+              </div>
+            </div>
           )}
           
           {currentView === 'history' && (
