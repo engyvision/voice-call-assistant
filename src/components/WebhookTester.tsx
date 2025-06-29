@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { TestTube, CheckCircle, XCircle, AlertTriangle, RefreshCw } from 'lucide-react';
+import { TestTube, CheckCircle, XCircle, AlertTriangle, RefreshCw, Info } from 'lucide-react';
 
 interface TestResult {
   name: string;
@@ -9,6 +9,8 @@ interface TestResult {
   response?: string;
   error?: string;
   timing: number;
+  interpretation: string;
+  severity: 'success' | 'warning' | 'error';
 }
 
 export default function WebhookTester() {
@@ -24,35 +26,62 @@ export default function WebhookTester() {
 
     const webhooks = [
       {
-        name: 'TwiML Voice (GET)',
+        name: 'TwiML Voice (Basic Test)',
         url: `${supabaseUrl}/functions/v1/twiml-voice?callId=${testCallId}`,
         method: 'GET',
-        expectedStatus: [200, 401] // Either works or needs auth
+        description: 'Tests if the voice webhook function exists and is deployed'
       },
       {
-        name: 'TwiML Voice (POST)',
+        name: 'TwiML Voice (Simulated Twilio)',
         url: `${supabaseUrl}/functions/v1/twiml-voice?callId=${testCallId}`,
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': 'TwilioProxy/1.1'
+        },
         body: new URLSearchParams({
-          CallSid: 'test-call-sid',
+          CallSid: 'CAtest123456789',
           CallStatus: 'in-progress',
           From: '+15551234567',
-          To: '+15559876543'
+          To: '+15559876543',
+          AccountSid: 'ACtest123456789'
         }),
-        expectedStatus: [200, 401]
+        description: 'Simulates a real Twilio webhook call'
       },
       {
-        name: 'TwiML Status',
+        name: 'TwiML Status (Simulated Twilio)',
         url: `${supabaseUrl}/functions/v1/twiml-status?callId=${testCallId}`,
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': 'TwilioProxy/1.1'
+        },
         body: new URLSearchParams({
-          CallSid: 'test-call-sid',
-          CallStatus: 'completed'
+          CallSid: 'CAtest123456789',
+          CallStatus: 'completed',
+          CallDuration: '45',
+          AccountSid: 'ACtest123456789'
         }),
-        expectedStatus: [200, 401]
+        description: 'Tests the status callback webhook'
       },
       {
-        name: 'Twilio Initiate',
+        name: 'TwiML Gather (Simulated Twilio)',
+        url: `${supabaseUrl}/functions/v1/twiml-gather?callId=${testCallId}`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': 'TwilioProxy/1.1'
+        },
+        body: new URLSearchParams({
+          CallSid: 'CAtest123456789',
+          SpeechResult: 'Hello, I would like to make an appointment',
+          Confidence: '0.95',
+          AccountSid: 'ACtest123456789'
+        }),
+        description: 'Tests the speech gathering webhook'
+      },
+      {
+        name: 'Twilio Initiate (Authenticated)',
         url: `${supabaseUrl}/functions/v1/twilio-initiate`,
         method: 'POST',
         headers: {
@@ -66,7 +95,7 @@ export default function WebhookTester() {
           callGoal: 'Test call',
           additionalContext: 'This is a test'
         }),
-        expectedStatus: [200, 400, 500] // Various responses are OK for testing
+        description: 'Tests the call initiation function with proper auth'
       }
     ];
 
@@ -78,23 +107,69 @@ export default function WebhookTester() {
       try {
         const response = await fetch(webhook.url, {
           method: webhook.method,
-          headers: {
-            'Content-Type': webhook.method === 'POST' && !webhook.headers ? 'application/x-www-form-urlencoded' : undefined,
-            ...webhook.headers
-          },
+          headers: webhook.headers,
           body: webhook.body
         });
 
         const timing = Date.now() - startTime;
         const responseText = await response.text();
         
+        // Determine success and interpretation based on the specific test
+        let success = false;
+        let interpretation = '';
+        let severity: 'success' | 'warning' | 'error' = 'error';
+
+        if (webhook.name.includes('TwiML Voice (Basic Test)')) {
+          if (response.status === 401) {
+            success = true;
+            severity = 'warning';
+            interpretation = 'Function exists but requires authentication (expected for security)';
+          } else if (response.status === 200) {
+            success = true;
+            severity = 'success';
+            interpretation = 'Function accessible and responding';
+          } else if (response.status === 404) {
+            interpretation = 'Function not found - not deployed to Supabase';
+          } else {
+            interpretation = `Unexpected status ${response.status}`;
+          }
+        } else if (webhook.name.includes('Simulated Twilio')) {
+          if (response.status === 200) {
+            success = true;
+            severity = 'success';
+            interpretation = 'Webhook working correctly - returns proper TwiML/response';
+          } else if (response.status === 401) {
+            severity = 'warning';
+            interpretation = 'Function exists but authentication failed (may need Twilio signature validation)';
+          } else if (response.status === 404) {
+            interpretation = 'Function not found - not deployed to Supabase';
+          } else {
+            interpretation = `Function error: HTTP ${response.status}`;
+          }
+        } else if (webhook.name.includes('Authenticated')) {
+          if (response.status === 200) {
+            success = true;
+            severity = 'success';
+            interpretation = 'Function working correctly with authentication';
+          } else if (response.status === 400 || response.status === 500) {
+            severity = 'warning';
+            interpretation = 'Function accessible but returned error (check logs for details)';
+          } else if (response.status === 401) {
+            interpretation = 'Authentication failed - check SUPABASE_ANON_KEY';
+          } else {
+            interpretation = `Unexpected response: HTTP ${response.status}`;
+          }
+        }
+        
         newResults.push({
           name: webhook.name,
           url: webhook.url,
           status: response.status,
-          success: webhook.expectedStatus.includes(response.status),
-          response: responseText.substring(0, 500), // Limit response length
-          timing
+          success,
+          response: responseText.substring(0, 1000),
+          timing,
+          interpretation,
+          severity
         });
 
       } catch (error) {
@@ -105,7 +180,9 @@ export default function WebhookTester() {
           status: 0,
           success: false,
           error: error.message,
-          timing
+          timing,
+          interpretation: 'Network error - function may not exist or be unreachable',
+          severity: 'error'
         });
       }
     }
@@ -115,19 +192,25 @@ export default function WebhookTester() {
   };
 
   const getStatusIcon = (result: TestResult) => {
-    if (result.success) {
-      return <CheckCircle className="w-5 h-5 text-green-600" />;
-    } else if (result.status === 0) {
-      return <XCircle className="w-5 h-5 text-red-600" />;
-    } else {
-      return <AlertTriangle className="w-5 h-5 text-yellow-600" />;
+    switch (result.severity) {
+      case 'success':
+        return <CheckCircle className="w-5 h-5 text-green-600" />;
+      case 'warning':
+        return <AlertTriangle className="w-5 h-5 text-yellow-600" />;
+      case 'error':
+        return <XCircle className="w-5 h-5 text-red-600" />;
     }
   };
 
   const getStatusColor = (result: TestResult) => {
-    if (result.success) return 'border-green-200 bg-green-50';
-    if (result.status === 0) return 'border-red-200 bg-red-50';
-    return 'border-yellow-200 bg-yellow-50';
+    switch (result.severity) {
+      case 'success':
+        return 'border-green-200 bg-green-50';
+      case 'warning':
+        return 'border-yellow-200 bg-yellow-50';
+      case 'error':
+        return 'border-red-200 bg-red-50';
+    }
   };
 
   return (
@@ -146,6 +229,17 @@ export default function WebhookTester() {
           <RefreshCw className={`w-4 h-4 mr-2 ${testing ? 'animate-spin' : ''}`} />
           {testing ? 'Testing...' : 'Test All Webhooks'}
         </button>
+      </div>
+
+      {/* Important Note */}
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+        <div className="flex items-start">
+          <Info className="w-5 h-5 text-blue-600 mr-2 mt-0.5 flex-shrink-0" />
+          <div className="text-sm text-blue-800">
+            <p className="font-medium mb-1">About Webhook Testing</p>
+            <p>These tests simulate how Twilio calls your webhooks. A 401 "authentication required" response means the function exists but is properly secured. Real Twilio calls include authentication headers that these tests don't have.</p>
+          </div>
+        </div>
       </div>
 
       {/* Configuration Check */}
@@ -167,10 +261,12 @@ export default function WebhookTester() {
         </div>
         
         <div className="mt-3 text-xs text-gray-600">
-          <p><strong>Expected Twilio Webhook URLs:</strong></p>
-          <p>• Voice: {import.meta.env.VITE_SUPABASE_URL}/functions/v1/twiml-voice</p>
-          <p>• Status: {import.meta.env.VITE_SUPABASE_URL}/functions/v1/twiml-status</p>
-          <p>• Fallback: {import.meta.env.VITE_SUPABASE_URL}/functions/v1/twiml-status</p>
+          <p><strong>Twilio Webhook URLs (copy these to Twilio Console):</strong></p>
+          <div className="bg-white p-2 rounded border mt-1 font-mono text-xs">
+            <p>Voice: {import.meta.env.VITE_SUPABASE_URL}/functions/v1/twiml-voice</p>
+            <p>Status: {import.meta.env.VITE_SUPABASE_URL}/functions/v1/twiml-status</p>
+            <p>Fallback: {import.meta.env.VITE_SUPABASE_URL}/functions/v1/twiml-status</p>
+          </div>
         </div>
       </div>
 
@@ -196,6 +292,15 @@ export default function WebhookTester() {
                 <strong>URL:</strong> {result.url}
               </div>
               
+              {/* Clear Interpretation */}
+              <div className={`text-sm p-2 rounded mb-2 ${
+                result.severity === 'success' ? 'bg-green-100 text-green-800' :
+                result.severity === 'warning' ? 'bg-yellow-100 text-yellow-800' :
+                'bg-red-100 text-red-800'
+              }`}>
+                <strong>Result:</strong> {result.interpretation}
+              </div>
+              
               {result.error && (
                 <div className="text-sm text-red-700 bg-red-100 p-2 rounded mb-2">
                   <strong>Error:</strong> {result.error}
@@ -212,21 +317,6 @@ export default function WebhookTester() {
                   </pre>
                 </details>
               )}
-              
-              {/* Interpretation */}
-              <div className="mt-2 text-xs">
-                {result.success ? (
-                  <span className="text-green-700">✅ Webhook is accessible and responding correctly</span>
-                ) : result.status === 404 ? (
-                  <span className="text-red-700">❌ Function not found - may not be deployed</span>
-                ) : result.status === 401 ? (
-                  <span className="text-yellow-700">⚠️ Authentication required (expected for secured endpoints)</span>
-                ) : result.status === 0 ? (
-                  <span className="text-red-700">❌ Network error - function may not exist or be unreachable</span>
-                ) : (
-                  <span className="text-yellow-700">⚠️ Unexpected response - check function logs</span>
-                )}
-              </div>
             </div>
           ))}
         </div>
@@ -234,12 +324,15 @@ export default function WebhookTester() {
 
       {/* Troubleshooting Guide */}
       <div className="mt-8 bg-blue-50 rounded-lg p-4">
-        <h3 className="font-medium text-blue-900 mb-3">Troubleshooting Guide</h3>
+        <h3 className="font-medium text-blue-900 mb-3">What the Results Mean</h3>
         <div className="text-sm text-blue-800 space-y-2">
-          <p><strong>If TwiML Voice shows 404:</strong> The function isn't deployed. Check your Supabase Functions dashboard.</p>
-          <p><strong>If you get network errors:</strong> Check your VITE_SUPABASE_URL in .env file.</p>
-          <p><strong>If Twilio says "application error":</strong> The voice webhook is failing. Check function logs in Supabase.</p>
-          <p><strong>If calls don't connect:</strong> Verify your Twilio phone number configuration matches the URLs above.</p>
+          <p><strong>✅ Green (Success):</strong> Function is working correctly</p>
+          <p><strong>⚠️ Yellow (Warning):</strong> Function exists but has authentication/configuration issues</p>
+          <p><strong>❌ Red (Error):</strong> Function not found or network error</p>
+          <p className="mt-3 font-medium">If Twilio says "application error occurred":</p>
+          <p>• Check that TwiML Voice shows green or yellow (not red)</p>
+          <p>• Look at Supabase Function logs for error details</p>
+          <p>• Verify Twilio webhook URLs match exactly</p>
         </div>
       </div>
     </div>
