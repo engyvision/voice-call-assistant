@@ -12,31 +12,6 @@ const supabase = createClient(
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 );
 
-// Helper function to validate Twilio request
-function validateTwilioRequest(req: Request): boolean {
-  // For Twilio webhooks, we need to be more permissive
-  const method = req.method;
-  const contentType = req.headers.get('content-type') || '';
-  const userAgent = req.headers.get('user-agent') || '';
-  
-  // Accept POST requests with form data (typical Twilio webhook)
-  if (method === 'POST' && contentType.includes('application/x-www-form-urlencoded')) {
-    return true;
-  }
-  
-  // Accept requests with Twilio user agent
-  if (userAgent.includes('TwilioProxy') || userAgent.includes('Twilio')) {
-    return true;
-  }
-  
-  // Accept requests with Twilio signature header
-  if (req.headers.get('x-twilio-signature')) {
-    return true;
-  }
-  
-  return false;
-}
-
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -49,7 +24,8 @@ Deno.serve(async (req: Request) => {
     console.log('TwiML Status webhook called:', {
       method: req.method,
       url: req.url,
-      headers: Object.fromEntries(req.headers.entries())
+      userAgent: req.headers.get('user-agent'),
+      contentType: req.headers.get('content-type')
     });
 
     // Get callId from URL parameters
@@ -66,26 +42,23 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Validate request is from Twilio or is a test
-    const isValidTwilioRequest = validateTwilioRequest(req);
-    const isTestRequest = callId?.startsWith('test-');
-    
-    console.log('Request validation:', { isValidTwilioRequest, isTestRequest });
-
-    // For production, we'll be more permissive to ensure Twilio can reach us
-    if (!isValidTwilioRequest && !isTestRequest) {
-      console.log('Request validation failed, but allowing for debugging');
-      // Don't block the request, just log it
-    }
-
     // Handle test requests
-    if (isTestRequest) {
+    if (callId?.startsWith('test-')) {
       console.log('Test request to status webhook:', callId);
       return new Response('Test OK - Status webhook is accessible', {
         headers: corsHeaders
       });
     }
     
+    // For production calls, we need to be permissive to allow Twilio through
+    if (req.method !== 'POST') {
+      console.error('Invalid method for Twilio webhook:', req.method);
+      return new Response('Invalid method', {
+        status: 405,
+        headers: corsHeaders
+      });
+    }
+
     // Get Twilio webhook data
     let formData;
     try {
