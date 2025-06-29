@@ -7,8 +7,9 @@ Based on your symptoms:
 - ❌ Twilio says "application error occurred" 
 - ❌ No logs in twiml-voice, twiml-status, or twiml-gather functions
 - ❌ Webhook tests show 401 errors
+- ❌ AI doesn't respond intelligently to user input
 
-**Root Cause**: The TwiML webhook functions are likely failing due to missing environment variables or AI/Voice service configuration issues.
+**Root Cause**: The TwiML webhook functions are missing proper AI integration and environment variables.
 
 ---
 
@@ -202,6 +203,16 @@ curl -X POST "YOUR_SUPABASE_URL/functions/v1/twiml-gather?callId=test-123" \
 - Check RLS policies allow function access
 - Ensure database migration completed successfully
 
+### Issue 6: AI Not Responding Intelligently
+
+**Symptoms**: Dialer keeps asking for information without understanding responses
+**Fixes**:
+- Verify AI_PROVIDER is set to 'openai' or 'claude'
+- Check OPENAI_API_KEY or CLAUDE_API_KEY is valid
+- Ensure twiml-gather function has AI integration
+- Test AI API directly to verify it's working
+- Check function logs for AI processing errors
+
 ---
 
 ## 🧪 Quick Diagnostic Tests
@@ -230,6 +241,16 @@ Check if AI services are responding:
 - Anthropic Status: https://status.anthropic.com/
 - ElevenLabs Status: https://status.elevenlabs.io/
 
+### Test 4: AI Integration Test
+```bash
+curl -X POST "YOUR_SUPABASE_URL/functions/v1/twiml-gather?callId=test-ai" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -H "User-Agent: TwilioProxy/1.1" \
+  -d "CallSid=test&SpeechResult=Yes I can help you&Confidence=0.95"
+```
+
+**Expected**: TwiML with intelligent AI response, not generic message
+
 ---
 
 ## 📞 Emergency Fallback Configuration
@@ -251,7 +272,8 @@ Add these console.log statements to your functions:
 console.log('Environment check:', {
   hasOpenAI: !!Deno.env.get('OPENAI_API_KEY'),
   hasElevenLabs: !!Deno.env.get('ELEVENLABS_API_KEY'),
-  hasSupabase: !!Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  hasSupabase: !!Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'),
+  aiProvider: Deno.env.get('AI_PROVIDER')
 });
 ```
 
@@ -260,6 +282,7 @@ console.log('Environment check:', {
 - API response times
 - Error rates by service
 - Call completion rates
+- AI response quality
 
 ---
 
@@ -268,9 +291,10 @@ console.log('Environment check:', {
 You'll know the system is working when:
 1. ✅ Webhook tests return 200 status codes
 2. ✅ Function logs show successful AI/Voice API calls
-3. ✅ Test calls connect and AI responds naturally
-4. ✅ Call records update with transcripts
+3. ✅ Test calls connect and AI responds naturally to user input
+4. ✅ Call records update with intelligent conversation transcripts
 5. ✅ No "application error occurred" messages
+6. ✅ AI understands context and maintains conversation flow
 
 ---
 
@@ -281,5 +305,17 @@ You'll know the system is working when:
 3. **Simplify the call flow** to isolate issues
 4. **Contact Twilio support** with specific error logs
 5. **Review recent changes** to environment variables or code
+6. **Use the Diagnostics tool** in the app to test all services
 
-Remember: The "application error occurred" message from Twilio usually means your webhook returned an error or invalid TwiML. Focus on getting the webhook functions to return valid XML responses first.
+Remember: The "application error occurred" message from Twilio usually means your webhook returned an error or invalid TwiML. Focus on getting the webhook functions to return valid XML responses with proper AI integration first.
+
+## 🤖 AI Integration Checklist
+
+For intelligent conversation, ensure:
+- [ ] AI_PROVIDER environment variable is set
+- [ ] Valid API key for chosen provider (OpenAI or Claude)
+- [ ] twiml-voice generates AI-powered opening messages
+- [ ] twiml-gather processes user speech with AI
+- [ ] Conversation history is maintained in database
+- [ ] AI responses are contextually appropriate
+- [ ] Error handling falls back to rule-based responses

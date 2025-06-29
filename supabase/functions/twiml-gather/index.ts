@@ -62,19 +62,6 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Check if this looks like a Twilio request
-    const userAgent = req.headers.get('user-agent') || '';
-    const isTwilioRequest = userAgent.includes('TwilioProxy') || userAgent.includes('Twilio');
-    const hasTwilioSignature = req.headers.get('x-twilio-signature');
-    
-    console.log('Request analysis:', { isTwilioRequest, hasTwilioSignature: !!hasTwilioSignature });
-
-    // Accept requests from Twilio (with signature) or allow all for now to debug
-    if (!isTwilioRequest && !hasTwilioSignature) {
-      console.log('Non-Twilio request without signature - allowing for debugging');
-      // For debugging, we'll allow these requests but log them
-    }
-
     // Get Twilio webhook data
     let formData;
     try {
@@ -107,6 +94,7 @@ Deno.serve(async (req: Request) => {
       .single();
 
     if (!callRecord) {
+      console.error('Call record not found for callId:', callId);
       return new Response(generateErrorTwiML(), {
         headers: { 'Content-Type': 'text/xml', ...corsHeaders }
       });
@@ -115,16 +103,18 @@ Deno.serve(async (req: Request) => {
     // Get current conversation history
     const conversationHistory = parseConversationHistory(callRecord.result_transcript || '');
 
-    // Process speech with AI
+    // Process speech with AI to generate intelligent response
     const aiResponse = await processWithAI(speechResult, callRecord, conversationHistory);
     
-    // Generate appropriate TwiML response
+    // Generate appropriate TwiML response based on AI decision
     const twiml = generateResponseTwiML(aiResponse, callId);
 
     // Update call record with conversation progress (only for real calls)
     if (!callId.startsWith('test-')) {
       await updateCallProgress(callId, speechResult, aiResponse, conversationHistory);
     }
+
+    console.log('Generated AI response:', aiResponse);
 
     return new Response(twiml, {
       headers: { 'Content-Type': 'text/xml', ...corsHeaders }
@@ -142,22 +132,43 @@ async function processWithAI(
   userSpeech: string, 
   callRecord: any, 
   conversationHistory: ConversationTurn[]
-): Promise<string> {
+): Promise<{ text: string; shouldContinue: boolean }> {
+  
+  // Check if AI is configured
+  if (!OPENAI_API_KEY && !CLAUDE_API_KEY) {
+    console.log('No AI provider configured, using rule-based response');
+    return {
+      text: generateRuleBasedResponse(userSpeech, callRecord),
+      shouldContinue: !shouldEndCall(userSpeech)
+    };
+  }
+
   try {
     const systemPrompt = buildSystemPrompt(callRecord);
     const conversationText = formatConversationHistory(conversationHistory);
 
+    let aiResponse;
     if (AI_PROVIDER === 'openai' && OPENAI_API_KEY) {
-      return await callOpenAI(systemPrompt, conversationText, userSpeech);
+      aiResponse = await callOpenAI(systemPrompt, conversationText, userSpeech);
     } else if (AI_PROVIDER === 'claude' && CLAUDE_API_KEY) {
-      return await callClaude(systemPrompt, conversationText, userSpeech);
+      aiResponse = await callClaude(systemPrompt, conversationText, userSpeech);
     } else {
-      // Fallback to rule-based response
-      return generateRuleBasedResponse(userSpeech, callRecord);
+      throw new Error('No valid AI provider configured');
     }
+
+    console.log('AI generated response:', aiResponse);
+
+    return {
+      text: aiResponse,
+      shouldContinue: !shouldEndCall(aiResponse)
+    };
+
   } catch (error) {
     console.error('AI processing error:', error);
-    return generateFallbackResponse(userSpeech, callRecord);
+    return {
+      text: generateFallbackResponse(userSpeech, callRecord),
+      shouldContinue: true
+    };
   }
 }
 
@@ -182,11 +193,14 @@ REGRAS DE CONVERSA:
 - Se a pessoa estiver ocupada, ofereça para ligar em outro momento
 - Se conseguir o objetivo, confirme os detalhes e agradeça
 - Se não conseguir, agradeça e termine educadamente
+- Responda de forma natural e conversacional
+- Adapte-se ao tom e estilo da pessoa
 
 FORMATO DE RESPOSTA:
 - Responda apenas com o texto que deve ser falado
 - Não inclua ações ou descrições entre parênteses
 - Mantenha tom conversacional e natural
+- Use linguagem apropriada para o contexto
 
 Lembre-se: Você está representando seu cliente, seja profissional e eficiente.`;
 }
@@ -215,7 +229,7 @@ async function callOpenAI(
         { role: 'system', content: systemPrompt },
         { 
           role: 'user', 
-          content: `Histórico da conversa:\n${conversationHistory}\n\nÚltima fala da pessoa: ${userInput}\n\nResponda naturalmente em português:` 
+          content: `Histórico da conversa:\n${conversationHistory}\n\nÚltima fala da pessoa: "${userInput}"\n\nResponda naturalmente em português como um assistente profissional:` 
         }
       ],
       temperature: 0.7,
@@ -253,7 +267,7 @@ async function callClaude(
       messages: [
         {
           role: 'user',
-          content: `Histórico da conversa:\n${conversationHistory}\n\nÚltima fala da pessoa: ${userInput}\n\nResponda naturalmente em português:`
+          content: `Histórico da conversa:\n${conversationHistory}\n\nÚltima fala da pessoa: "${userInput}"\n\nResponda naturalmente em português como um assistente profissional:`
         }
       ]
     })
@@ -290,6 +304,10 @@ function generateRuleBasedResponse(userSpeech: string, callRecord: any): string 
     return "Sou um assistente de IA ligando em nome do meu cliente para " + call_goal.toLowerCase() + ". Vocês podem me ajudar?";
   }
   
+  if (lowerSpeech.includes('horário') || lowerSpeech.includes('quando')) {
+    return "Que horários funcionam melhor para vocês? Temos flexibilidade durante a semana.";
+  }
+  
   return "Obrigado por essa informação. Deixe-me ajudá-lo com sua solicitação.";
 }
 
@@ -324,15 +342,13 @@ function parseConversationHistory(transcript: string): ConversationTurn[] {
   return history;
 }
 
-function generateResponseTwiML(aiResponse: string, callId: string): string {
-  const shouldContinue = !shouldEndCall(aiResponse);
-  
-  if (shouldContinue) {
+function generateResponseTwiML(aiResponse: { text: string; shouldContinue: boolean }, callId: string): string {
+  if (aiResponse.shouldContinue) {
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="alice" language="pt-BR">${aiResponse}</Say>
+  <Say voice="alice" language="pt-BR">${aiResponse.text}</Say>
   <Gather input="speech" action="${Deno.env.get('SUPABASE_URL')}/functions/v1/twiml-gather?callId=${callId}" method="POST" speechTimeout="3" timeout="10" language="pt-BR">
-    <Say voice="alice" language="pt-BR">Por favor, me diga como posso ajudá-lo.</Say>
+    <Say voice="alice" language="pt-BR">Por favor, continue.</Say>
   </Gather>
   <Say voice="alice" language="pt-BR">Obrigado pelo seu tempo. Tenha um ótimo dia!</Say>
   <Hangup/>
@@ -340,7 +356,7 @@ function generateResponseTwiML(aiResponse: string, callId: string): string {
   } else {
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="alice" language="pt-BR">${aiResponse}</Say>
+  <Say voice="alice" language="pt-BR">${aiResponse.text}</Say>
   <Hangup/>
 </Response>`;
   }
@@ -357,7 +373,7 @@ function generateTestTwiML(): string {
 async function updateCallProgress(
   callId: string, 
   userSpeech: string, 
-  aiResponse: string, 
+  aiResponse: { text: string; shouldContinue: boolean }, 
   currentHistory: ConversationTurn[]
 ): Promise<void> {
   const newHistory = [
@@ -371,7 +387,7 @@ async function updateCallProgress(
     {
       timestamp: new Date().toISOString(),
       speaker: 'ai' as const,
-      text: aiResponse,
+      text: aiResponse.text,
       confidence: 0.9
     }
   ];
@@ -400,7 +416,8 @@ function shouldEndCall(text: string): boolean {
     'boa noite',
     'encerrar',
     'finalizar',
-    'até mais'
+    'até mais',
+    'desligar'
   ];
   
   const lowerText = text.toLowerCase();
