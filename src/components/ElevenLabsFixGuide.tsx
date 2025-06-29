@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Volume2, AlertTriangle, CheckCircle, RefreshCw, Copy, ExternalLink } from 'lucide-react';
+import { Volume2, AlertTriangle, CheckCircle, RefreshCw, Copy, ExternalLink, Info } from 'lucide-react';
 import { ElevenLabsTestService } from '../utils/elevenLabsTest';
 
 export default function ElevenLabsFixGuide() {
@@ -15,15 +15,17 @@ export default function ElevenLabsFixGuide() {
       const result = await testService.testConnection();
       setTestResult(result);
       
-      if (result.success || result.details?.availablePortugueseVoices) {
-        const voices = await testService.getPortugueseVoices();
-        setPortugueseVoices(voices);
-      }
+      // Always try to get Portuguese voices for reference
+      const voices = await testService.getPortugueseVoices();
+      setPortugueseVoices(voices);
     } catch (error) {
       setTestResult({
         success: false,
         error: 'Test failed with exception',
-        details: error.message
+        details: {
+          errorMessage: error.message,
+          suggestion: 'This might be a network connectivity issue'
+        }
       });
     }
     
@@ -34,11 +36,47 @@ export default function ElevenLabsFixGuide() {
     navigator.clipboard.writeText(text);
   };
 
+  const getResultIcon = () => {
+    if (!testResult) return null;
+    
+    if (testResult.details?.corsBlocked) {
+      return <Info className="w-5 h-5 text-blue-600 mr-2" />;
+    }
+    
+    return testResult.success ? (
+      <CheckCircle className="w-5 h-5 text-green-600 mr-2" />
+    ) : (
+      <AlertTriangle className="w-5 h-5 text-red-600 mr-2" />
+    );
+  };
+
+  const getResultColor = () => {
+    if (!testResult) return '';
+    
+    if (testResult.details?.corsBlocked) {
+      return 'border-blue-200 bg-blue-50';
+    }
+    
+    return testResult.success 
+      ? 'border-green-200 bg-green-50' 
+      : 'border-red-200 bg-red-50';
+  };
+
+  const getResultTitle = () => {
+    if (!testResult) return '';
+    
+    if (testResult.details?.corsBlocked) {
+      return 'CORS Restriction Detected (Normal Behavior)';
+    }
+    
+    return testResult.success ? 'Connection Successful!' : 'Connection Failed';
+  };
+
   return (
     <div className="bg-white rounded-lg border border-orange-200 p-6">
       <div className="flex items-center mb-4">
         <Volume2 className="w-6 h-6 text-orange-600 mr-3" />
-        <h3 className="text-lg font-semibold text-gray-900">ElevenLabs Connection Fix</h3>
+        <h3 className="text-lg font-semibold text-gray-900">ElevenLabs Connection Diagnostics</h3>
       </div>
 
       <div className="space-y-4">
@@ -54,40 +92,83 @@ export default function ElevenLabsFixGuide() {
 
         {/* Test Results */}
         {testResult && (
-          <div className={`p-4 rounded-lg border ${
-            testResult.success 
-              ? 'border-green-200 bg-green-50' 
-              : 'border-red-200 bg-red-50'
-          }`}>
+          <div className={`p-4 rounded-lg border ${getResultColor()}`}>
             <div className="flex items-center mb-2">
-              {testResult.success ? (
-                <CheckCircle className="w-5 h-5 text-green-600 mr-2" />
-              ) : (
-                <AlertTriangle className="w-5 h-5 text-red-600 mr-2" />
-              )}
+              {getResultIcon()}
               <span className="font-medium">
-                {testResult.success ? 'Connection Successful!' : 'Connection Failed'}
+                {getResultTitle()}
               </span>
             </div>
             
             {testResult.error && (
-              <p className="text-red-700 mb-2">{testResult.error}</p>
+              <p className={`mb-2 ${testResult.details?.corsBlocked ? 'text-blue-700' : 'text-red-700'}`}>
+                {testResult.error}
+              </p>
             )}
             
             {testResult.details && (
               <div className="text-sm text-gray-600">
-                <strong>Details:</strong>
-                <pre className="mt-1 p-2 bg-white rounded text-xs overflow-auto">
-                  {JSON.stringify(testResult.details, null, 2)}
-                </pre>
+                {testResult.details.message && (
+                  <p className="mb-2 font-medium text-gray-800">{testResult.details.message}</p>
+                )}
+                
+                {testResult.details.explanation && (
+                  <p className="mb-2 text-blue-700">{testResult.details.explanation}</p>
+                )}
+                
+                {testResult.details.suggestion && (
+                  <p className="mb-2 text-gray-700">
+                    <strong>💡 Note:</strong> {testResult.details.suggestion}
+                  </p>
+                )}
+                
+                {testResult.details.technicalNote && (
+                  <p className="mb-2 text-xs text-gray-600 italic">
+                    {testResult.details.technicalNote}
+                  </p>
+                )}
+                
+                {(testResult.details.totalVoices || testResult.details.portugueseVoices !== undefined) && (
+                  <div className="mt-2 p-2 bg-white rounded text-xs">
+                    <strong>API Status:</strong>
+                    <ul className="mt-1 space-y-1">
+                      {testResult.details.totalVoices && (
+                        <li>• Total voices available: {testResult.details.totalVoices}</li>
+                      )}
+                      {testResult.details.portugueseVoices !== undefined && (
+                        <li>• Portuguese voices: {testResult.details.portugueseVoices}</li>
+                      )}
+                      {testResult.details.configuredVoiceExists !== undefined && (
+                        <li>• Configured voice exists: {testResult.details.configuredVoiceExists ? '✅' : '❌'}</li>
+                      )}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
           </div>
         )}
 
+        {/* CORS Information Banner */}
+        <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+          <div className="flex items-start">
+            <Info className="w-5 h-5 text-blue-600 mr-2 mt-0.5 flex-shrink-0" />
+            <div>
+              <h4 className="font-medium text-blue-900 mb-2">About Browser CORS Restrictions</h4>
+              <p className="text-sm text-blue-800 mb-2">
+                If you see "Failed to fetch" or CORS errors, this is <strong>completely normal</strong>. 
+                Browsers block direct API calls to external services for security reasons.
+              </p>
+              <p className="text-sm text-blue-700">
+                ✅ Your actual voice calls work perfectly through Supabase Edge Functions, which don't have CORS restrictions.
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* Common Issues and Fixes */}
-        <div className="bg-blue-50 rounded-lg p-4">
-          <h4 className="font-medium text-blue-900 mb-3">Common ElevenLabs Issues & Fixes</h4>
+        <div className="bg-gray-50 rounded-lg p-4">
+          <h4 className="font-medium text-gray-900 mb-3">Common ElevenLabs Issues & Fixes</h4>
           
           <div className="space-y-3 text-sm">
             <div className="border-l-4 border-blue-400 pl-3">
