@@ -123,7 +123,8 @@ Deno.serve(async (req: Request) => {
     // Use the call ID as a parameter to identify the call in webhooks
     formData.append('Url', `${supabaseUrl}/functions/v1/twiml-voice?callId=${callId}`);
     formData.append('StatusCallback', `${supabaseUrl}/functions/v1/twiml-status?callId=${callId}`);
-    formData.append('StatusCallbackEvent', 'initiated,ringing,answered,completed,failed,busy,no-answer');
+    // Fix the status callback events - use only valid events
+    formData.append('StatusCallbackEvent', 'answered,completed');
     formData.append('StatusCallbackMethod', 'POST');
     formData.append('Timeout', '30'); // 30 second timeout for ringing
     formData.append('Record', 'false'); // Don't record calls for privacy
