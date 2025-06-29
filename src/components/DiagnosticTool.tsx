@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Activity, AlertTriangle, CheckCircle, XCircle, Loader2, Eye, EyeOff } from 'lucide-react';
+import ElevenLabsFixGuide from './ElevenLabsFixGuide';
 
 interface DiagnosticResult {
   service: string;
@@ -13,6 +14,7 @@ export default function DiagnosticTool() {
   const [results, setResults] = useState<DiagnosticResult[]>([]);
   const [testing, setTesting] = useState(false);
   const [showApiKeys, setShowApiKeys] = useState(false);
+  const [showElevenLabsFix, setShowElevenLabsFix] = useState(false);
 
   const runDiagnostics = async () => {
     setTesting(true);
@@ -31,6 +33,11 @@ export default function DiagnosticTool() {
       try {
         const result = await test();
         setResults(prev => [...prev, result]);
+        
+        // Show ElevenLabs fix guide if ElevenLabs test fails
+        if (result.service === 'ElevenLabs API' && result.status === 'error') {
+          setShowElevenLabsFix(true);
+        }
       } catch (error) {
         setResults(prev => [...prev, {
           service: 'Test Error',
@@ -432,6 +439,13 @@ export default function DiagnosticTool() {
         </div>
       )}
 
+      {/* ElevenLabs Fix Guide */}
+      {showElevenLabsFix && (
+        <div className="mb-6">
+          <ElevenLabsFixGuide />
+        </div>
+      )}
+
       {/* Diagnostic Results */}
       {results.length > 0 && (
         <div className="space-y-4">
@@ -473,6 +487,7 @@ export default function DiagnosticTool() {
           <p>• <strong>If API tests fail:</strong> Check your API keys and service status pages.</p>
           <p>• <strong>If webhook tests fail:</strong> Ensure Edge Functions are deployed with environment variables.</p>
           <p>• <strong>If Twilio tests fail:</strong> Verify your Twilio credentials and account status.</p>
+          <p>• <strong>If ElevenLabs fails with "Failed to fetch":</strong> This is normal from browser. Check Edge Function environment variables.</p>
         </div>
       </div>
     </div>
