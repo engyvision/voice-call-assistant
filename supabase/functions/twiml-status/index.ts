@@ -42,7 +42,7 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Handle test requests
+    // Handle test requests (these come from our debug panel)
     if (callId?.startsWith('test-')) {
       console.log('Test request to status webhook:', callId);
       return new Response('Test OK - Status webhook is accessible', {
@@ -50,7 +50,7 @@ Deno.serve(async (req: Request) => {
       });
     }
     
-    // For production calls, we need to be permissive to allow Twilio through
+    // Only allow POST requests for production calls
     if (req.method !== 'POST') {
       console.error('Invalid method for Twilio webhook:', req.method);
       return new Response('Invalid method', {
@@ -77,6 +77,15 @@ Deno.serve(async (req: Request) => {
     const answeredBy = formData.get('AnsweredBy') as string;
 
     console.log('Call status update:', { callId, callSid, callStatus, callDuration, answeredBy });
+
+    // Validate this looks like a Twilio request
+    if (!callSid || !callStatus) {
+      console.error('Missing required Twilio parameters');
+      return new Response('Invalid webhook data', {
+        status: 400,
+        headers: corsHeaders
+      });
+    }
 
     // Update call record based on status
     let updateData: any = { status: mapTwilioStatus(callStatus) };

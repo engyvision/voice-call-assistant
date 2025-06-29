@@ -12,19 +12,6 @@ const supabase = createClient(
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 );
 
-// Helper function to validate Twilio request
-function validateTwilioRequest(req: Request): boolean {
-  // In production, you should validate the Twilio signature
-  // For now, we'll check for basic Twilio webhook parameters
-  const userAgent = req.headers.get('user-agent') || '';
-  const contentType = req.headers.get('content-type') || '';
-  
-  // Twilio sends requests with specific user agent and content type
-  return userAgent.includes('TwilioProxy') || 
-         contentType.includes('application/x-www-form-urlencoded') ||
-         req.headers.get('x-twilio-signature') !== null;
-}
-
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -34,42 +21,62 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    console.log('TwiML Gather webhook called:', {
+      method: req.method,
+      url: req.url,
+      userAgent: req.headers.get('user-agent'),
+      contentType: req.headers.get('content-type')
+    });
+
     // Get callId from URL parameters
     const url = new URL(req.url);
     const callId = url.searchParams.get('callId');
     
-    // Validate request is from Twilio or is a test
-    const isValidTwilioRequest = validateTwilioRequest(req);
-    const isTestRequest = callId?.startsWith('test-');
-    
-    if (!isValidTwilioRequest && !isTestRequest) {
-      console.log('Unauthorized request to gather webhook');
-      return new Response(JSON.stringify({ 
-        code: 401, 
-        message: 'Missing authorization header' 
-      }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
+    console.log('Extracted callId:', callId);
+
+    if (!callId) {
+      console.error('No callId provided in gather webhook URL');
+      return new Response(generateErrorTwiML(), {
+        headers: { 'Content-Type': 'text/xml', ...corsHeaders }
       });
     }
 
-    // Handle test requests
-    if (isTestRequest) {
+    // Handle test requests (these come from our debug panel)
+    if (callId?.startsWith('test-')) {
       console.log('Test request to gather webhook:', callId);
       return new Response(generateTestTwiML(), {
         headers: { 'Content-Type': 'text/xml', ...corsHeaders }
       });
     }
+
+    // Only allow POST requests for production calls
+    if (req.method !== 'POST') {
+      console.error('Invalid method for Twilio webhook:', req.method);
+      return new Response(generateErrorTwiML(), {
+        headers: { 'Content-Type': 'text/xml', ...corsHeaders }
+      });
+    }
+
+    // Get Twilio webhook data
+    let formData;
+    try {
+      formData = await req.formData();
+    } catch (error) {
+      console.error('Failed to parse form data:', error);
+      return new Response(generateErrorTwiML(), {
+        headers: { 'Content-Type': 'text/xml', ...corsHeaders }
+      });
+    }
     
-    const formData = await req.formData();
     const callSid = formData.get('CallSid') as string;
     const speechResult = formData.get('SpeechResult') as string;
     const confidence = formData.get('Confidence') as string;
 
     console.log('Speech gathered:', { callId, callSid, speechResult, confidence });
 
-    if (!callId) {
-      console.error('No callId provided in gather webhook URL');
+    // Validate this looks like a Twilio request
+    if (!callSid) {
+      console.error('Missing required Twilio parameters');
       return new Response(generateErrorTwiML(), {
         headers: { 'Content-Type': 'text/xml', ...corsHeaders }
       });

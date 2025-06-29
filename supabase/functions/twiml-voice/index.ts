@@ -42,7 +42,7 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Handle test requests
+    // Handle test requests (these come from our debug panel)
     if (callId?.startsWith('test-')) {
       console.log('Test request to voice webhook:', callId);
       return new Response(generateTestTwiML(), {
@@ -50,8 +50,7 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // For production calls, we need to be permissive to allow Twilio through
-    // Twilio sends POST requests with form data, not Authorization headers
+    // Only allow POST requests for production calls
     if (req.method !== 'POST') {
       console.error('Invalid method for Twilio webhook:', req.method);
       return new Response(generateErrorTwiML('Invalid request method'), {
@@ -76,6 +75,14 @@ Deno.serve(async (req: Request) => {
     const to = formData.get('To') as string;
 
     console.log('Twilio webhook data:', { callId, callSid, callStatus, from, to });
+
+    // Validate this looks like a Twilio request
+    if (!callSid || !from || !to) {
+      console.error('Missing required Twilio parameters');
+      return new Response(generateErrorTwiML('Invalid webhook data'), {
+        headers: { 'Content-Type': 'text/xml', ...corsHeaders }
+      });
+    }
 
     // Get call data from database using our callId
     const { data: callRecord, error } = await supabase
