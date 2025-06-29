@@ -12,6 +12,11 @@ const supabase = createClient(
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 );
 
+// AI Configuration
+const AI_PROVIDER = Deno.env.get('AI_PROVIDER') || 'openai';
+const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
+const CLAUDE_API_KEY = Deno.env.get('CLAUDE_API_KEY');
+
 Deno.serve(async (req: Request) => {
   // Always allow OPTIONS requests
   if (req.method === "OPTIONS") {
@@ -57,13 +62,6 @@ Deno.serve(async (req: Request) => {
     const hasTwilioSignature = req.headers.get('x-twilio-signature');
     
     console.log('Request analysis:', { isTwilioRequest, hasTwilioSignature: !!hasTwilioSignature });
-
-    // Accept requests from Twilio (with signature) or allow all for now to debug
-    // In production, you should validate the Twilio signature
-    if (!isTwilioRequest && !hasTwilioSignature) {
-      console.log('Non-Twilio request without signature - allowing for debugging');
-      // For debugging, we'll allow these requests but log them
-    }
 
     // Get Twilio webhook data
     let formData;
@@ -120,8 +118,11 @@ Deno.serve(async (req: Request) => {
       };
     }
 
-    // Generate intelligent TwiML with AI integration
-    const twiml = await generateIntelligentTwiML(callRecord, callDetails, callId);
+    // Generate intelligent opening message using AI
+    const openingMessage = await generateAIOpeningMessage(callRecord);
+
+    // Create TwiML with AI-powered opening and speech gathering
+    const twiml = generateIntelligentTwiML(openingMessage, callId);
 
     // Update call status in database (only for real calls, not tests)
     if (!callId.startsWith('test-')) {
@@ -156,26 +157,112 @@ Deno.serve(async (req: Request) => {
   }
 });
 
-async function generateIntelligentTwiML(callRecord: any, callDetails: any, callId: string): Promise<string> {
-  const { recipient_name, call_goal } = callRecord;
-  const { originalContext } = callDetails;
+async function generateAIOpeningMessage(callRecord: any): Promise<string> {
+  const { recipient_name, call_goal, additional_context } = callRecord;
   
-  // Create intelligent initial message based on call goal and context
-  const initialMessage = await generateInitialMessage(call_goal, recipient_name, originalContext);
-  
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="alice" language="pt-BR">${initialMessage}</Say>
-  <Gather input="speech" action="${Deno.env.get('SUPABASE_URL')}/functions/v1/twiml-gather?callId=${callId}" method="POST" speechTimeout="3" timeout="10" language="pt-BR">
-    <Say voice="alice" language="pt-BR">Por favor, me diga se você pode me ajudar com isso.</Say>
-  </Gather>
-  <Say voice="alice" language="pt-BR">Não consegui ouvir uma resposta. Obrigado pelo seu tempo e tenha um ótimo dia!</Say>
-  <Hangup/>
-</Response>`;
+  // Check if AI is configured
+  if (!OPENAI_API_KEY && !CLAUDE_API_KEY) {
+    console.log('No AI provider configured, using fallback message');
+    return generateFallbackOpeningMessage(call_goal, recipient_name, additional_context);
+  }
+
+  try {
+    const systemPrompt = `Você é um assistente de IA profissional fazendo uma ligação telefônica em português brasileiro.
+
+OBJETIVO DA LIGAÇÃO: ${call_goal}
+NOME DO DESTINATÁRIO: ${recipient_name}
+CONTEXTO ADICIONAL: ${additional_context || 'Nenhum contexto adicional'}
+
+INSTRUÇÕES PARA A MENSAGEM DE ABERTURA:
+1. Seja educado, profissional e direto
+2. Identifique-se como assistente de IA
+3. Explique brevemente o motivo da ligação
+4. Faça uma pergunta para iniciar a conversa
+5. Mantenha a mensagem concisa (máximo 3 frases)
+6. Use português brasileiro natural
+
+Gere APENAS a mensagem de abertura que será falada ao atender o telefone.`;
+
+    let aiResponse;
+    
+    if (AI_PROVIDER === 'openai' && OPENAI_API_KEY) {
+      aiResponse = await callOpenAI(systemPrompt);
+    } else if (AI_PROVIDER === 'claude' && CLAUDE_API_KEY) {
+      aiResponse = await callClaude(systemPrompt);
+    } else {
+      throw new Error('No valid AI provider configured');
+    }
+
+    console.log('AI generated opening message:', aiResponse);
+    return aiResponse;
+
+  } catch (error) {
+    console.error('Failed to generate AI opening message:', error);
+    return generateFallbackOpeningMessage(call_goal, recipient_name, additional_context);
+  }
 }
 
-async function generateInitialMessage(callGoal: string, recipientName: string, additionalContext: string): Promise<string> {
-  // Use AI to generate a more natural and contextual opening message
+async function callOpenAI(systemPrompt: string): Promise<string> {
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'gpt-4',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: 'Gere a mensagem de abertura para esta ligação telefônica.' }
+      ],
+      temperature: 0.7,
+      max_tokens: 150,
+      presence_penalty: 0.1,
+      frequency_penalty: 0.1
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`OpenAI API error: ${error}`);
+  }
+
+  const data = await response.json();
+  return data.choices[0]?.message?.content?.trim() || '';
+}
+
+async function callClaude(systemPrompt: string): Promise<string> {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${CLAUDE_API_KEY}`,
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-3-sonnet-20240229',
+      max_tokens: 150,
+      temperature: 0.7,
+      system: systemPrompt,
+      messages: [
+        {
+          role: 'user',
+          content: 'Gere a mensagem de abertura para esta ligação telefônica.'
+        }
+      ]
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Claude API error: ${error}`);
+  }
+
+  const data = await response.json();
+  return data.content[0]?.text?.trim() || '';
+}
+
+function generateFallbackOpeningMessage(callGoal: string, recipientName: string, additionalContext: string): string {
   const baseMessage = `Olá, aqui é um assistente de IA ligando em nome do meu cliente.`;
   
   // Create context-aware messages based on call goal
@@ -208,6 +295,18 @@ async function generateInitialMessage(callGoal: string, recipientName: string, a
     default:
       return `${baseMessage} ${additionalContext || 'Tenho uma solicitação para discutir com vocês. Vocês têm um momento?'}`;
   }
+}
+
+function generateIntelligentTwiML(openingMessage: string, callId: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice" language="pt-BR">${openingMessage}</Say>
+  <Gather input="speech" action="${Deno.env.get('SUPABASE_URL')}/functions/v1/twiml-gather?callId=${callId}" method="POST" speechTimeout="3" timeout="10" language="pt-BR">
+    <Say voice="alice" language="pt-BR">Por favor, me diga como posso ajudá-lo.</Say>
+  </Gather>
+  <Say voice="alice" language="pt-BR">Não consegui ouvir uma resposta. Obrigado pelo seu tempo e tenha um ótimo dia!</Say>
+  <Hangup/>
+</Response>`;
 }
 
 function generateTestTwiML(): string {
