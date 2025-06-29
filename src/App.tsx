@@ -1,15 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Bot, Phone, Sparkles, Bug, AlertCircle, TestTube } from 'lucide-react';
+import { Bot, Phone, Sparkles, Bug, AlertCircle, TestTube, Activity } from 'lucide-react';
 import CallForm from './components/CallForm';
 import CallStatus from './components/CallStatus';
 import CallHistory from './components/CallHistory';
 import DebugPanel from './components/DebugPanel';
 import WebhookTester from './components/WebhookTester';
+import DiagnosticTool from './components/DiagnosticTool';
 import { CallRequest, CallRecord } from './types';
 import { initiateCall, getCallStatus } from './utils/realApi';
 import { supabase } from './lib/supabase';
 
-type AppView = 'form' | 'status' | 'history' | 'debug' | 'webhooks';
+type AppView = 'form' | 'status' | 'history' | 'debug' | 'webhooks' | 'diagnostics';
 
 function App() {
   const [currentView, setCurrentView] = useState<AppView>('form');
@@ -151,6 +152,17 @@ function App() {
                 History
               </button>
               <button
+                onClick={() => handleViewChange('diagnostics')}
+                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                  currentView === 'diagnostics'
+                    ? 'bg-purple-100 text-purple-700'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                }`}
+              >
+                <Activity className="w-4 h-4 inline mr-2" />
+                Diagnostics
+              </button>
+              <button
                 onClick={() => handleViewChange('webhooks')}
                 className={`px-4 py-2 rounded-lg font-medium transition-colors ${
                   currentView === 'webhooks'
@@ -242,6 +254,12 @@ function App() {
           {currentView === 'history' && (
             <div className="w-full max-w-4xl">
               <CallHistory refreshTrigger={callHistoryRefresh} />
+            </div>
+          )}
+
+          {currentView === 'diagnostics' && (
+            <div className="w-full max-w-6xl">
+              <DiagnosticTool />
             </div>
           )}
 
