@@ -1,3 +1,7 @@
+// Load environment variables from .env file
+import dotenv from 'dotenv';
+dotenv.config();
+
 // Script to help identify the correct webhook URLs and provide Twilio configuration
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
