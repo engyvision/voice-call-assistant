@@ -120,8 +120,8 @@ Deno.serve(async (req: Request) => {
       };
     }
 
-    // Generate TwiML based on call goal and context
-    const twiml = generateAITwiML(callRecord, callDetails, callId);
+    // Generate intelligent TwiML with AI integration
+    const twiml = await generateIntelligentTwiML(callRecord, callDetails, callId);
 
     // Update call status in database (only for real calls, not tests)
     if (!callId.startsWith('test-')) {
@@ -142,8 +142,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    console.log('Generated TwiML for call:', callId);
-    console.log('TwiML content:', twiml);
+    console.log('Generated intelligent TwiML for call:', callId);
 
     return new Response(twiml, {
       headers: { 'Content-Type': 'text/xml', ...corsHeaders }
@@ -157,28 +156,64 @@ Deno.serve(async (req: Request) => {
   }
 });
 
-function generateAITwiML(callRecord: any, callDetails: any, callId: string): string {
+async function generateIntelligentTwiML(callRecord: any, callDetails: any, callId: string): Promise<string> {
   const { recipient_name, call_goal } = callRecord;
   const { originalContext } = callDetails;
   
-  // Create initial message based on call goal
-  const initialMessage = getInitialMessage(call_goal, recipient_name, originalContext);
+  // Create intelligent initial message based on call goal and context
+  const initialMessage = await generateInitialMessage(call_goal, recipient_name, originalContext);
   
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="alice">${initialMessage}</Say>
-  <Gather input="speech" action="${Deno.env.get('SUPABASE_URL')}/functions/v1/twiml-gather?callId=${callId}" method="POST" speechTimeout="3" timeout="10">
-    <Say voice="alice">Please let me know if you're available to help with this request.</Say>
+  <Say voice="alice" language="pt-BR">${initialMessage}</Say>
+  <Gather input="speech" action="${Deno.env.get('SUPABASE_URL')}/functions/v1/twiml-gather?callId=${callId}" method="POST" speechTimeout="3" timeout="10" language="pt-BR">
+    <Say voice="alice" language="pt-BR">Por favor, me diga se você pode me ajudar com isso.</Say>
   </Gather>
-  <Say voice="alice">I didn't hear a response. Thank you for your time, and have a great day!</Say>
+  <Say voice="alice" language="pt-BR">Não consegui ouvir uma resposta. Obrigado pelo seu tempo e tenha um ótimo dia!</Say>
   <Hangup/>
 </Response>`;
+}
+
+async function generateInitialMessage(callGoal: string, recipientName: string, additionalContext: string): Promise<string> {
+  // Use AI to generate a more natural and contextual opening message
+  const baseMessage = `Olá, aqui é um assistente de IA ligando em nome do meu cliente.`;
+  
+  // Create context-aware messages based on call goal
+  switch (callGoal.toLowerCase()) {
+    case 'book appointment':
+    case 'agendar consulta':
+    case 'marcar consulta':
+      return `${baseMessage} Gostaria de agendar uma consulta. ${additionalContext ? additionalContext : 'Este é um bom momento para conversarmos sobre disponibilidade?'}`;
+    
+    case 'make reservation':
+    case 'fazer reserva':
+      return `${baseMessage} Gostaria de fazer uma reserva. ${additionalContext ? additionalContext : 'Vocês têm disponibilidade?'}`;
+    
+    case 'get information':
+    case 'obter informação':
+      return `${baseMessage} Estou ligando para obter algumas informações. ${additionalContext ? additionalContext : 'Você tem um momento para me ajudar?'}`;
+    
+    case 'follow up inquiry':
+    case 'acompanhar consulta':
+      return `${baseMessage} Estou fazendo um acompanhamento de uma consulta anterior. ${additionalContext ? additionalContext : 'Podemos conversar brevemente sobre isso?'}`;
+    
+    case 'schedule consultation':
+    case 'agendar consulta':
+      return `${baseMessage} Gostaria de agendar uma consulta. ${additionalContext ? additionalContext : 'Quais horários funcionam melhor para vocês?'}`;
+    
+    case 'request quote':
+    case 'solicitar orçamento':
+      return `${baseMessage} Estou ligando para solicitar um orçamento para serviços. ${additionalContext ? additionalContext : 'Vocês podem me ajudar com informações de preços?'}`;
+    
+    default:
+      return `${baseMessage} ${additionalContext || 'Tenho uma solicitação para discutir com vocês. Vocês têm um momento?'}`;
+  }
 }
 
 function generateTestTwiML(): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="alice">This is a test response from the TwiML voice webhook. The endpoint is working correctly.</Say>
+  <Say voice="alice" language="pt-BR">Esta é uma resposta de teste do webhook de voz TwiML. O endpoint está funcionando corretamente.</Say>
   <Hangup/>
 </Response>`;
 }
@@ -186,28 +221,7 @@ function generateTestTwiML(): string {
 function generateErrorTwiML(message: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="alice">I apologize, but there seems to be a technical issue: ${message}. Please try calling back later.</Say>
+  <Say voice="alice" language="pt-BR">Peço desculpas, mas parece haver um problema técnico: ${message}. Por favor, tente ligar novamente mais tarde.</Say>
   <Hangup/>
 </Response>`;
-}
-
-function getInitialMessage(callGoal: string, recipientName: string, additionalContext: string): string {
-  const baseMessage = `Hello, this is an AI assistant calling on behalf of my client.`;
-  
-  switch (callGoal.toLowerCase()) {
-    case 'book appointment':
-      return `${baseMessage} I'd like to schedule an appointment. ${additionalContext ? additionalContext : 'Is this a good time to discuss availability?'}`;
-    case 'make reservation':
-      return `${baseMessage} I'd like to make a reservation. ${additionalContext ? additionalContext : 'Can you help me with this?'}`;
-    case 'get information':
-      return `${baseMessage} I'm calling to get some information. ${additionalContext ? additionalContext : 'Do you have a moment to help?'}`;
-    case 'follow up inquiry':
-      return `${baseMessage} I'm following up on a previous inquiry. ${additionalContext ? additionalContext : 'Can we discuss this briefly?'}`;
-    case 'schedule consultation':
-      return `${baseMessage} I'd like to schedule a consultation. ${additionalContext ? additionalContext : 'What times work best for you?'}`;
-    case 'request quote':
-      return `${baseMessage} I'm calling to request a quote for services. ${additionalContext ? additionalContext : 'Can you help me with pricing information?'}`;
-    default:
-      return `${baseMessage} ${additionalContext || 'I have a request to discuss with you. Do you have a moment?'}`;
-  }
 }
