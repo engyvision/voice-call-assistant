@@ -3,7 +3,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Twilio-Signature",
 };
 
 // Initialize Supabase client
@@ -25,7 +25,8 @@ Deno.serve(async (req: Request) => {
       method: req.method,
       url: req.url,
       userAgent: req.headers.get('user-agent'),
-      contentType: req.headers.get('content-type')
+      contentType: req.headers.get('content-type'),
+      twilioSignature: req.headers.get('x-twilio-signature') ? 'Present' : 'Missing'
     });
 
     // Get callId from URL parameters
@@ -52,11 +53,15 @@ Deno.serve(async (req: Request) => {
     // Check if this looks like a Twilio request
     const userAgent = req.headers.get('user-agent') || '';
     const isTwilioRequest = userAgent.includes('TwilioProxy') || userAgent.includes('Twilio');
+    const hasTwilioSignature = req.headers.get('x-twilio-signature');
     
-    // For non-Twilio requests, be more lenient
-    if (!isTwilioRequest && req.method !== 'POST') {
-      console.log('Non-Twilio request to gather webhook');
-      return new Response(generateTestTwiML(), {
+    console.log('Request analysis:', { isTwilioRequest, hasTwilioSignature: !!hasTwilioSignature });
+
+    // For non-Twilio requests without proper signature, only allow if it's a test
+    if (!isTwilioRequest && !hasTwilioSignature && !callId.startsWith('test-')) {
+      console.log('Rejecting non-Twilio request without signature');
+      return new Response(generateErrorTwiML(), {
+        status: 401,
         headers: { 'Content-Type': 'text/xml', ...corsHeaders }
       });
     }
