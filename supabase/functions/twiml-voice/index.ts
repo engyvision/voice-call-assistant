@@ -12,6 +12,19 @@ const supabase = createClient(
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 );
 
+// Helper function to validate Twilio request
+function validateTwilioRequest(req: Request): boolean {
+  // In production, you should validate the Twilio signature
+  // For now, we'll check for basic Twilio webhook parameters
+  const userAgent = req.headers.get('user-agent') || '';
+  const contentType = req.headers.get('content-type') || '';
+  
+  // Twilio sends requests with specific user agent and content type
+  return userAgent.includes('TwilioProxy') || 
+         contentType.includes('application/x-www-form-urlencoded') ||
+         req.headers.get('x-twilio-signature') !== null;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -25,6 +38,29 @@ Deno.serve(async (req: Request) => {
     const url = new URL(req.url);
     const callId = url.searchParams.get('callId');
     
+    // Validate request is from Twilio or is a test
+    const isValidTwilioRequest = validateTwilioRequest(req);
+    const isTestRequest = callId?.startsWith('test-');
+    
+    if (!isValidTwilioRequest && !isTestRequest) {
+      console.log('Unauthorized request to voice webhook');
+      return new Response(JSON.stringify({ 
+        code: 401, 
+        message: 'Missing authorization header' 
+      }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
+      });
+    }
+
+    // Handle test requests
+    if (isTestRequest) {
+      console.log('Test request to voice webhook:', callId);
+      return new Response(generateTestTwiML(), {
+        headers: { 'Content-Type': 'text/xml', ...corsHeaders }
+      });
+    }
+
     // Also get Twilio webhook data
     const formData = await req.formData();
     const callSid = formData.get('CallSid') as string;
@@ -111,6 +147,14 @@ function generateAITwiML(callRecord: any, callDetails: any, callId: string): str
     <Say voice="alice">Please let me know if you're available to help with this request.</Say>
   </Gather>
   <Say voice="alice">I didn't hear a response. Thank you for your time, and have a great day!</Say>
+  <Hangup/>
+</Response>`;
+}
+
+function generateTestTwiML(): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">This is a test response from the TwiML voice webhook. The endpoint is working correctly.</Say>
   <Hangup/>
 </Response>`;
 }

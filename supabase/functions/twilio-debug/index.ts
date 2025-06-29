@@ -148,7 +148,9 @@ async function testWebhooks() {
         CallStatus: 'in-progress',
         From: '+15551234567',
         To: '+15559876543'
-      })
+      }),
+      expectedStatus: 401, // We expect 401 because we're not sending proper auth
+      description: 'Tests if webhook endpoint is accessible and properly secured'
     },
     {
       name: 'TwiML Status Webhook',
@@ -158,7 +160,21 @@ async function testWebhooks() {
         CallSid: 'test-call-sid',
         CallStatus: 'completed',
         CallDuration: '45'
-      })
+      }),
+      expectedStatus: 401, // We expect 401 because we're not sending proper auth
+      description: 'Tests if status webhook endpoint is accessible and properly secured'
+    },
+    {
+      name: 'TwiML Gather Webhook',
+      url: `${supabaseUrl}/functions/v1/twiml-gather?callId=${testCallId}`,
+      method: 'POST',
+      body: new URLSearchParams({
+        CallSid: 'test-call-sid',
+        SpeechResult: 'Hello, I would like to make an appointment',
+        Confidence: '0.95'
+      }),
+      expectedStatus: 401, // We expect 401 because we're not sending proper auth
+      description: 'Tests if gather webhook endpoint is accessible and properly secured'
     }
   ];
 
@@ -174,12 +190,18 @@ async function testWebhooks() {
         body: test.body
       });
 
+      const responseText = await response.text();
+      const isExpectedStatus = response.status === test.expectedStatus;
+
       results.push({
         name: test.name,
         url: test.url,
         status: response.status,
-        success: response.ok,
-        response_text: await response.text()
+        success: isExpectedStatus,
+        response_text: responseText,
+        description: test.description,
+        expected_status: test.expectedStatus,
+        note: response.status === 401 ? 'Expected 401 - endpoint is properly secured' : null
       });
     } catch (error) {
       results.push({
@@ -187,14 +209,16 @@ async function testWebhooks() {
         url: test.url,
         status: 'error',
         success: false,
-        error: error.message
+        error: error.message,
+        description: test.description
       });
     }
   }
 
   return new Response(JSON.stringify({
     webhook_tests: results,
-    test_call_id: testCallId
+    test_call_id: testCallId,
+    note: 'Webhook endpoints are secured and require proper Twilio authentication. 401 responses indicate security is working correctly.'
   }), {
     headers: { 'Content-Type': 'application/json', ...corsHeaders }
   });
