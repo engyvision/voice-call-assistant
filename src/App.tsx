@@ -19,6 +19,9 @@ function App() {
   const [callHistoryRefresh, setCallHistoryRefresh] = useState(0);
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
+  // Check if we're in development mode
+  const isDevelopment = import.meta.env.DEV || import.meta.env.VITE_SHOW_DEBUG_TABS === 'true';
+
   // Check Supabase connection on mount
   useEffect(() => {
     checkDatabaseConnection();
@@ -179,39 +182,45 @@ function App() {
               >
                 History
               </button>
-              <button
-                onClick={() => handleViewChange('diagnostics')}
-                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                  currentView === 'diagnostics'
-                    ? 'bg-purple-100 text-purple-700'
-                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                }`}
-              >
-                <Activity className="w-4 h-4 inline mr-2" />
-                Diagnostics
-              </button>
-              <button
-                onClick={() => handleViewChange('webhooks')}
-                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                  currentView === 'webhooks'
-                    ? 'bg-green-100 text-green-700'
-                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                }`}
-              >
-                <TestTube className="w-4 h-4 inline mr-2" />
-                Test Webhooks
-              </button>
-              <button
-                onClick={() => handleViewChange('debug')}
-                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                  currentView === 'debug'
-                    ? 'bg-red-100 text-red-700'
-                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                }`}
-              >
-                <Bug className="w-4 h-4 inline mr-2" />
-                Debug
-              </button>
+              
+              {/* Debug tabs - only show in development */}
+              {isDevelopment && (
+                <>
+                  <button
+                    onClick={() => handleViewChange('diagnostics')}
+                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                      currentView === 'diagnostics'
+                        ? 'bg-purple-100 text-purple-700'
+                        : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                    }`}
+                  >
+                    <Activity className="w-4 h-4 inline mr-2" />
+                    Diagnostics
+                  </button>
+                  <button
+                    onClick={() => handleViewChange('webhooks')}
+                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                      currentView === 'webhooks'
+                        ? 'bg-green-100 text-green-700'
+                        : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                    }`}
+                  >
+                    <TestTube className="w-4 h-4 inline mr-2" />
+                    Test Webhooks
+                  </button>
+                  <button
+                    onClick={() => handleViewChange('debug')}
+                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                      currentView === 'debug'
+                        ? 'bg-red-100 text-red-700'
+                        : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                    }`}
+                  >
+                    <Bug className="w-4 h-4 inline mr-2" />
+                    Debug
+                  </button>
+                </>
+              )}
             </nav>
           </div>
         </div>
@@ -285,19 +294,20 @@ function App() {
             </div>
           )}
 
-          {currentView === 'diagnostics' && (
+          {/* Debug views - only render in development */}
+          {isDevelopment && currentView === 'diagnostics' && (
             <div className="w-full max-w-6xl">
               <DiagnosticTool />
             </div>
           )}
 
-          {currentView === 'webhooks' && (
+          {isDevelopment && currentView === 'webhooks' && (
             <div className="w-full max-w-6xl">
               <WebhookTester />
             </div>
           )}
 
-          {currentView === 'debug' && (
+          {isDevelopment && currentView === 'debug' && (
             <div className="w-full max-w-6xl">
               <DebugPanel />
             </div>
@@ -318,6 +328,7 @@ function App() {
               <span>• Supabase Database {connectionError ? '❌' : '✅'}</span>
               <span>• Real-time Call Tracking ✅</span>
               <span>• Production Ready ✅</span>
+              {isDevelopment && <span>• Debug Mode 🔧</span>}
             </div>
           </div>
         </div>
