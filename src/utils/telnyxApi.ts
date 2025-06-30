@@ -1,12 +1,6 @@
 import { CallRequest, CallRecord, ApiResponse } from '../types';
 import { supabase } from '../lib/supabase';
 
-// Telnyx API configuration
-const TELNYX_API_KEY = import.meta.env.VITE_TELNYX_API_KEY;
-const TELNYX_CONNECTION_ID = import.meta.env.VITE_TELNYX_CONNECTION_ID;
-const TELNYX_PHONE_NUMBER = import.meta.env.VITE_TELNYX_PHONE_NUMBER;
-const TELNYX_BASE_URL = 'https://api.telnyx.com/v2';
-
 // Add connection health check
 let connectionHealthy = false;
 let lastHealthCheck = 0;
@@ -123,14 +117,6 @@ export async function initiateCall(request: CallRequest): Promise<ApiResponse<st
       return { success: false, error: 'Database connection unavailable. Please check your Supabase configuration.' };
     }
 
-    // Validate Telnyx configuration
-    if (!TELNYX_API_KEY || !TELNYX_CONNECTION_ID || !TELNYX_PHONE_NUMBER) {
-      return { 
-        success: false, 
-        error: 'Telnyx configuration incomplete. Please check VITE_TELNYX_API_KEY, VITE_TELNYX_CONNECTION_ID, and VITE_TELNYX_PHONE_NUMBER.' 
-      };
-    }
-
     // First, create call record in Supabase
     const { data: callRecord, error: createError } = await supabase
       .from('call_records')
@@ -182,7 +168,7 @@ export async function initiateCall(request: CallRequest): Promise<ApiResponse<st
         })
         .eq('id', callRecord.id);
       
-      return { success: false, error: 'Failed to initiate call' };
+      return { success: false, error: 'Failed to initiate call: ' + errorText };
     }
 
     const result = await response.json();
@@ -202,7 +188,7 @@ export async function initiateCall(request: CallRequest): Promise<ApiResponse<st
       return { success: false, error: result.error || 'Failed to initiate call' };
     }
 
-    console.log('Call initiated successfully:', result.telnyxCallId);
+    console.log('Call initiated successfully:', result.callId);
 
     // Set up a timeout to mark call as failed if it stays in dialing too long
     setTimeout(async () => {
