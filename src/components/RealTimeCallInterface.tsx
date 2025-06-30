@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Phone, MessageSquare, Send, AlertCircle, Clock, User, Bot, Loader2, CheckCircle, XCircle } from 'lucide-react';
+import { Phone, MessageSquare, Send, AlertCircle, Clock, User, Bot, Loader2, CheckCircle, XCircle, RefreshCw } from 'lucide-react';
 import { CallRecord } from '../types';
-import { supabase } from '../lib/supabase';
+import { subscribeToCallUpdates, getCallStatus } from '../utils/realApi';
 
 interface RealTimeCallInterfaceProps {
   callRecord: CallRecord;
@@ -24,16 +24,20 @@ interface PendingQuestion {
   answer?: string;
 }
 
-export default function RealTimeCallInterface({ callRecord, onComplete }: RealTimeCallInterfaceProps) {
+export default function RealTimeCallInterface({ callRecord: initialCallRecord, onComplete }: RealTimeCallInterfaceProps) {
+  const [callRecord, setCallRecord] = useState<CallRecord>(initialCallRecord);
   const [conversationHistory, setConversationHistory] = useState<ConversationTurn[]>([]);
   const [pendingQuestions, setPendingQuestions] = useState<PendingQuestion[]>([]);
   const [currentAnswer, setCurrentAnswer] = useState('');
   const [isAnswering, setIsAnswering] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
   const [lastUpdate, setLastUpdate] = useState<string>('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   
   const conversationRef = useRef<HTMLDivElement>(null);
   const intervalRef = useRef<number>();
+  const subscriptionRef = useRef<any>();
 
   useEffect(() => {
     // Parse initial transcript if available
@@ -42,22 +46,56 @@ export default function RealTimeCallInterface({ callRecord, onComplete }: RealTi
     }
 
     // Set up real-time subscription for call updates
-    const subscription = supabase
-      .channel(`call-${callRecord.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'call_records',
-          filter: `id=eq.${callRecord.id}`
-        },
-        (payload) => {
-          console.log('Real-time call update:', payload);
-          handleCallUpdate(payload.new);
+    console.log('Setting up real-time subscription for call:', callRecord.id);
+    
+    subscriptionRef.current = subscribeToCallUpdates(callRecord.id, (updatedCallRecord) => {
+      console.log('Received real-time update:', updatedCallRecord);
+      setCallRecord(updatedCallRecord);
+      setLastUpdate(new Date().toLocaleTimeString());
+      setConnectionStatus('connected');
+      
+      // Parse new transcript
+      if (updatedCallRecord.result?.transcript) {
+        parseTranscript(updatedCallRecord.result.transcript);
+      }
+
+      // Check if call completed
+      if (updatedCallRecord.status === 'completed' || updatedCallRecord.status === 'failed') {
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
         }
-      )
-      .subscribe();
+        
+        // Auto-close after showing final state for a few seconds
+        setTimeout(() => {
+          onComplete();
+        }, 5000);
+      }
+    });
+
+    // Set up periodic refresh as fallback
+    const refreshInterval = setInterval(async () => {
+      if (callRecord.status === 'in-progress' || callRecord.status === 'dialing') {
+        try {
+          const response = await getCallStatus(callRecord.id);
+          if (response.success && response.data) {
+            const updatedRecord = response.data;
+            if (updatedRecord.status !== callRecord.status || 
+                updatedRecord.result?.transcript !== callRecord.result?.transcript) {
+              console.log('Fallback refresh detected changes:', updatedRecord);
+              setCallRecord(updatedRecord);
+              setLastUpdate(new Date().toLocaleTimeString());
+              
+              if (updatedRecord.result?.transcript) {
+                parseTranscript(updatedRecord.result.transcript);
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Fallback refresh failed:', error);
+          setConnectionStatus('disconnected');
+        }
+      }
+    }, 3000); // Check every 3 seconds
 
     // Start duration timer
     const startTime = new Date(callRecord.createdAt).getTime();
@@ -68,10 +106,13 @@ export default function RealTimeCallInterface({ callRecord, onComplete }: RealTi
     }, 1000);
 
     return () => {
-      subscription.unsubscribe();
+      if (subscriptionRef.current) {
+        subscriptionRef.current.unsubscribe();
+      }
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
       }
+      clearInterval(refreshInterval);
     };
   }, [callRecord.id]);
 
@@ -122,7 +163,7 @@ export default function RealTimeCallInterface({ callRecord, onComplete }: RealTi
 
     const aiUncertaintyPhrases = [
       'não tenho essa informação', 'preciso verificar', 'não sei',
-      'vou precisar consultar', 'não tenho certeza'
+      'vou precisar consultar', 'não tenho certeza', 'deixe-me verificar'
     ];
 
     // Check if human asked a question and AI might not have the answer
@@ -150,27 +191,6 @@ export default function RealTimeCallInterface({ callRecord, onComplete }: RealTi
     }
   };
 
-  const handleCallUpdate = (updatedCall: any) => {
-    setLastUpdate(new Date().toLocaleTimeString());
-    
-    // Parse new transcript
-    if (updatedCall.result_transcript) {
-      parseTranscript(updatedCall.result_transcript);
-    }
-
-    // Check if call completed
-    if (updatedCall.status === 'completed' || updatedCall.status === 'failed') {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
-      
-      // Auto-close after showing final state for a few seconds
-      setTimeout(() => {
-        onComplete();
-      }, 5000);
-    }
-  };
-
   const handleAnswerQuestion = async (questionId: string) => {
     if (!currentAnswer.trim()) return;
     
@@ -186,7 +206,7 @@ export default function RealTimeCallInterface({ callRecord, onComplete }: RealTi
         },
         body: JSON.stringify({
           callId: callRecord.id,
-          userInput: `[ASSISTANT PROVIDED INFO] ${currentAnswer}`,
+          userInput: currentAnswer,
           conversationHistory: conversationHistory,
           isAssistantInput: true
         })
@@ -208,6 +228,25 @@ export default function RealTimeCallInterface({ callRecord, onComplete }: RealTi
       console.error('Failed to send answer to AI:', error);
     } finally {
       setIsAnswering(false);
+    }
+  };
+
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      const response = await getCallStatus(callRecord.id);
+      if (response.success && response.data) {
+        setCallRecord(response.data);
+        setLastUpdate(new Date().toLocaleTimeString());
+        
+        if (response.data.result?.transcript) {
+          parseTranscript(response.data.result.transcript);
+        }
+      }
+    } catch (error) {
+      console.error('Manual refresh failed:', error);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -243,6 +282,17 @@ export default function RealTimeCallInterface({ callRecord, onComplete }: RealTi
     }
   };
 
+  const getConnectionStatusColor = () => {
+    switch (connectionStatus) {
+      case 'connected':
+        return 'text-green-600';
+      case 'disconnected':
+        return 'text-red-600';
+      default:
+        return 'text-yellow-600';
+    }
+  };
+
   return (
     <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-4xl mx-auto">
       {/* Header */}
@@ -263,11 +313,24 @@ export default function RealTimeCallInterface({ callRecord, onComplete }: RealTi
             <Clock className="w-4 h-4 mr-1" />
             {formatTime(callDuration)}
           </div>
-          {lastUpdate && (
-            <div className="text-xs text-gray-400 mt-1">
-              Last update: {lastUpdate}
-            </div>
-          )}
+          <div className="flex items-center justify-between mt-1">
+            {lastUpdate && (
+              <div className="text-xs text-gray-400">
+                Last update: {lastUpdate}
+              </div>
+            )}
+            <button
+              onClick={handleManualRefresh}
+              disabled={isRefreshing}
+              className="ml-2 p-1 text-gray-400 hover:text-gray-600"
+              title="Refresh call status"
+            >
+              <RefreshCw className={`w-3 h-3 ${isRefreshing ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+          <div className={`text-xs ${getConnectionStatusColor()}`}>
+            ● {connectionStatus}
+          </div>
         </div>
       </div>
 
@@ -278,12 +341,18 @@ export default function RealTimeCallInterface({ callRecord, onComplete }: RealTi
             <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
               <MessageSquare className="w-5 h-5 mr-2" />
               Live Conversation
+              {conversationHistory.length > 0 && (
+                <span className="ml-2 text-sm text-gray-500">
+                  ({conversationHistory.length} messages)
+                </span>
+              )}
             </h3>
             
             {conversationHistory.length === 0 ? (
               <div className="text-center text-gray-500 py-8">
                 <Phone className="w-8 h-8 mx-auto mb-2 opacity-50" />
                 <p>Waiting for conversation to begin...</p>
+                <p className="text-sm mt-2">Call status: {callRecord.status}</p>
               </div>
             ) : (
               <div className="space-y-4">
@@ -418,6 +487,25 @@ export default function RealTimeCallInterface({ callRecord, onComplete }: RealTi
                   </span>
                 </div>
               )}
+              <div className="flex justify-between">
+                <span className="text-gray-600">Connection:</span>
+                <span className={`font-medium capitalize ${getConnectionStatusColor()}`}>
+                  {connectionStatus}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Debug Info */}
+          <div className="bg-gray-100 rounded-lg p-3">
+            <h5 className="font-medium text-gray-700 mb-2 text-sm">Debug Info</h5>
+            <div className="text-xs text-gray-600 space-y-1">
+              <div>Call ID: {callRecord.id}</div>
+              <div>Created: {new Date(callRecord.createdAt).toLocaleString()}</div>
+              {callRecord.completedAt && (
+                <div>Completed: {new Date(callRecord.completedAt).toLocaleString()}</div>
+              )}
+              <div>Transcript Length: {callRecord.result?.transcript?.length || 0} chars</div>
             </div>
           </div>
         </div>
@@ -434,6 +522,7 @@ export default function RealTimeCallInterface({ callRecord, onComplete }: RealTi
                 <p><strong>Details:</strong> {callRecord.result.details}</p>
               )}
               <p><strong>Duration:</strong> {formatTime(callRecord.duration)}</p>
+              <p><strong>Success:</strong> {callRecord.result.success ? 'Yes' : 'No'}</p>
             </div>
           )}
           

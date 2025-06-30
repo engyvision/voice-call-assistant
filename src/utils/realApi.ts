@@ -30,6 +30,65 @@ async function checkSupabaseConnection(): Promise<boolean> {
   }
 }
 
+// Real-time subscription for call updates with improved error handling
+export function subscribeToCallUpdates(callId: string, callback: (callRecord: CallRecord) => void) {
+  console.log('Setting up real-time subscription for call:', callId);
+  
+  const subscription = supabase
+    .channel(`call-updates-${callId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'call_records',
+        filter: `id=eq.${callId}`
+      },
+      async (payload) => {
+        console.log('Real-time call update received:', payload);
+        
+        try {
+          // Transform the updated record
+          const data = payload.new;
+          const callRecord: CallRecord = {
+            id: data.id,
+            recipientName: data.recipient_name,
+            phoneNumber: data.phone_number,
+            callGoal: data.call_goal,
+            additionalContext: data.additional_context || '',
+            status: data.status,
+            result: data.result_success !== null ? {
+              success: data.result_success,
+              message: data.result_message || '',
+              details: data.result_details || '',
+              transcript: data.result_transcript || ''
+            } : null,
+            createdAt: data.created_at,
+            completedAt: data.completed_at,
+            duration: data.duration || 0
+          };
+          
+          callback(callRecord);
+        } catch (error) {
+          console.error('Error processing real-time update:', error);
+        }
+      }
+    )
+    .on('system', {}, (status) => {
+      console.log('Real-time subscription status:', status);
+    })
+    .subscribe((status) => {
+      console.log('Subscription status changed:', status);
+      if (status === 'SUBSCRIBED') {
+        console.log('Successfully subscribed to real-time updates for call:', callId);
+      } else if (status === 'CHANNEL_ERROR') {
+        console.error('Real-time subscription error for call:', callId);
+      }
+    });
+
+  return subscription;
+}
+
 // Real API implementation to replace mockApi.ts
 export async function initiateCall(request: CallRequest): Promise<ApiResponse<string>> {
   try {
@@ -273,49 +332,6 @@ export async function getAllCalls(): Promise<ApiResponse<CallRecord[]>> {
     console.error('Get all calls error:', error);
     return { success: false, error: 'Failed to get calls' };
   }
-}
-
-// Real-time subscription for call updates
-export function subscribeToCallUpdates(callId: string, callback: (callRecord: CallRecord) => void) {
-  const subscription = supabase
-    .channel(`call-${callId}`)
-    .on(
-      'postgres_changes',
-      {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'call_records',
-        filter: `id=eq.${callId}`
-      },
-      async (payload) => {
-        console.log('Real-time call update received:', payload);
-        
-        // Transform the updated record
-        const data = payload.new;
-        const callRecord: CallRecord = {
-          id: data.id,
-          recipientName: data.recipient_name,
-          phoneNumber: data.phone_number,
-          callGoal: data.call_goal,
-          additionalContext: data.additional_context || '',
-          status: data.status,
-          result: data.result_success !== null ? {
-            success: data.result_success,
-            message: data.result_message || '',
-            details: data.result_details || '',
-            transcript: data.result_transcript || ''
-          } : null,
-          createdAt: data.created_at,
-          completedAt: data.completed_at,
-          duration: data.duration || 0
-        };
-        
-        callback(callRecord);
-      }
-    )
-    .subscribe();
-
-  return subscription;
 }
 
 // Keep the mock simulation function for development/testing

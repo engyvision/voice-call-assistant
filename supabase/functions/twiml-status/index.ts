@@ -101,13 +101,11 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    console.log('Current call status:', currentCall.status);
+    console.log('Current call status in DB:', currentCall.status);
 
-    // Update call record based on status
+    // Prepare update data
     let updateData: any = { 
-      status: mapTwilioStatus(callStatus),
-      // Always update the last status callback time
-      updated_at: new Date().toISOString()
+      status: mapTwilioStatus(callStatus)
     };
     
     // Handle call completion
@@ -182,20 +180,31 @@ Deno.serve(async (req: Request) => {
         ' Call was answered by voicemail/answering machine.';
     }
 
-    // Perform the database update
-    const { error: updateError } = await supabase
-      .from('call_records')
-      .update(updateData)
-      .eq('id', callId);
+    // Only update if there are actual changes
+    const hasChanges = Object.keys(updateData).some(key => 
+      updateData[key] !== currentCall[key]
+    );
 
-    if (updateError) {
-      console.error('Failed to update call record:', updateError);
-      return new Response('Database update failed', {
-        status: 500,
-        headers: corsHeaders
-      });
+    if (hasChanges) {
+      console.log('Updating call record with changes:', updateData);
+      
+      // Perform the database update
+      const { error: updateError } = await supabase
+        .from('call_records')
+        .update(updateData)
+        .eq('id', callId);
+
+      if (updateError) {
+        console.error('Failed to update call record:', updateError);
+        return new Response('Database update failed', {
+          status: 500,
+          headers: corsHeaders
+        });
+      } else {
+        console.log('Successfully updated call record:', callId);
+      }
     } else {
-      console.log('Successfully updated call record:', callId, updateData);
+      console.log('No changes detected, skipping database update');
     }
 
     return new Response('OK', {

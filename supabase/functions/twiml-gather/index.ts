@@ -269,7 +269,8 @@ async function callOpenAI(
   });
 
   if (!response.ok) {
-    throw new Error(`OpenAI API error: ${response.status}`);
+    const error = await response.text();
+    throw new Error(`OpenAI API error: ${error}`);
   }
 
   const data = await response.json();
@@ -303,7 +304,8 @@ async function callClaude(
   });
 
   if (!response.ok) {
-    throw new Error(`Claude API error: ${response.status}`);
+    const error = await response.text();
+    throw new Error(`Claude API error: ${error}`);
   }
 
   const data = await response.json();
