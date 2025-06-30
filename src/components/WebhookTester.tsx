@@ -26,67 +26,18 @@ export default function WebhookTester() {
 
     const webhooks = [
       {
-        name: 'TwiML Voice (Basic Test)',
-        url: `${supabaseUrl}/functions/v1/twiml-voice?callId=${testCallId}`,
+        name: 'Telnyx Initiate (Basic Test)',
+        url: `${supabaseUrl}/functions/v1/telnyx-initiate?callId=${testCallId}`,
         method: 'GET',
-        description: 'Tests if the voice webhook function exists and is deployed'
+        description: 'Tests if the Telnyx initiate function exists and is deployed'
       },
       {
-        name: 'TwiML Voice (Simulated Twilio)',
-        url: `${supabaseUrl}/functions/v1/twiml-voice?callId=${testCallId}`,
+        name: 'Telnyx Initiate (Simulated Call)',
+        url: `${supabaseUrl}/functions/v1/telnyx-initiate`,
         method: 'POST',
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'User-Agent': 'TwilioProxy/1.1'
-        },
-        body: new URLSearchParams({
-          CallSid: 'CAtest123456789',
-          CallStatus: 'in-progress',
-          From: '+15551234567',
-          To: '+15559876543',
-          AccountSid: 'ACtest123456789'
-        }),
-        description: 'Simulates a real Twilio webhook call'
-      },
-      {
-        name: 'TwiML Status (Simulated Twilio)',
-        url: `${supabaseUrl}/functions/v1/twiml-status?callId=${testCallId}`,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'User-Agent': 'TwilioProxy/1.1'
-        },
-        body: new URLSearchParams({
-          CallSid: 'CAtest123456789',
-          CallStatus: 'completed',
-          CallDuration: '45',
-          AccountSid: 'ACtest123456789'
-        }),
-        description: 'Tests the status callback webhook'
-      },
-      {
-        name: 'TwiML Gather (Simulated Twilio)',
-        url: `${supabaseUrl}/functions/v1/twiml-gather?callId=${testCallId}`,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'User-Agent': 'TwilioProxy/1.1'
-        },
-        body: new URLSearchParams({
-          CallSid: 'CAtest123456789',
-          SpeechResult: 'Hello, I would like to make an appointment',
-          Confidence: '0.95',
-          AccountSid: 'ACtest123456789'
-        }),
-        description: 'Tests the speech gathering webhook'
-      },
-      {
-        name: 'Twilio Initiate (Authenticated)',
-        url: `${supabaseUrl}/functions/v1/twilio-initiate`,
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
         },
         body: JSON.stringify({
           callId: testCallId,
@@ -95,7 +46,32 @@ export default function WebhookTester() {
           callGoal: 'Test call',
           additionalContext: 'This is a test'
         }),
-        description: 'Tests the call initiation function with proper auth'
+        description: 'Simulates a real call initiation request'
+      },
+      {
+        name: 'Telnyx Webhook (Basic Test)',
+        url: `${supabaseUrl}/functions/v1/telnyx-webhook?callId=${testCallId}`,
+        method: 'GET',
+        description: 'Tests if the Telnyx webhook function exists'
+      },
+      {
+        name: 'Telnyx Webhook (Simulated Event)',
+        url: `${supabaseUrl}/functions/v1/telnyx-webhook?callId=${testCallId}`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Telnyx-Signature': 'test-signature'
+        },
+        body: JSON.stringify({
+          data: {
+            event_type: 'call.answered',
+            payload: {
+              call_control_id: 'test-call-control-id',
+              state: 'answered'
+            }
+          }
+        }),
+        description: 'Tests the webhook with simulated Telnyx event'
       }
     ];
 
@@ -119,45 +95,37 @@ export default function WebhookTester() {
         let interpretation = '';
         let severity: 'success' | 'warning' | 'error' = 'error';
 
-        if (webhook.name.includes('TwiML Voice (Basic Test)')) {
-          if (response.status === 401) {
-            success = true;
-            severity = 'warning';
-            interpretation = 'Function exists but requires authentication (expected for security)';
-          } else if (response.status === 200) {
+        if (webhook.name.includes('Basic Test')) {
+          if (response.status === 200) {
             success = true;
             severity = 'success';
-            interpretation = 'Function accessible and responding';
+            interpretation = 'Function accessible and responding correctly';
+          } else if (response.status === 401) {
+            severity = 'warning';
+            interpretation = 'Function exists but requires authentication (expected for some endpoints)';
           } else if (response.status === 404) {
             interpretation = 'Function not found - not deployed to Supabase';
           } else {
             interpretation = `Unexpected status ${response.status}`;
           }
-        } else if (webhook.name.includes('Simulated Twilio')) {
+        } else if (webhook.name.includes('Simulated')) {
           if (response.status === 200) {
             success = true;
             severity = 'success';
-            interpretation = 'Webhook working correctly - returns proper TwiML/response';
+            interpretation = 'Function working correctly - processes requests properly';
+          } else if (response.status === 400) {
+            severity = 'warning';
+            interpretation = 'Function accessible but validation failed (may need proper Telnyx credentials)';
           } else if (response.status === 401) {
             severity = 'warning';
-            interpretation = 'Function exists but authentication failed (may need Twilio signature validation)';
+            interpretation = 'Function exists but authentication failed';
           } else if (response.status === 404) {
             interpretation = 'Function not found - not deployed to Supabase';
+          } else if (response.status === 500) {
+            severity = 'warning';
+            interpretation = 'Function exists but internal error (check environment variables)';
           } else {
             interpretation = `Function error: HTTP ${response.status}`;
-          }
-        } else if (webhook.name.includes('Authenticated')) {
-          if (response.status === 200) {
-            success = true;
-            severity = 'success';
-            interpretation = 'Function working correctly with authentication';
-          } else if (response.status === 400 || response.status === 500) {
-            severity = 'warning';
-            interpretation = 'Function accessible but returned error (check logs for details)';
-          } else if (response.status === 401) {
-            interpretation = 'Authentication failed - check SUPABASE_ANON_KEY';
-          } else {
-            interpretation = `Unexpected response: HTTP ${response.status}`;
           }
         }
         
@@ -218,7 +186,7 @@ export default function WebhookTester() {
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center">
           <TestTube className="w-6 h-6 text-blue-600 mr-3" />
-          <h2 className="text-2xl font-bold text-gray-900">Webhook Diagnostics</h2>
+          <h2 className="text-2xl font-bold text-gray-900">Telnyx Webhook Diagnostics</h2>
         </div>
         
         <button
@@ -236,8 +204,8 @@ export default function WebhookTester() {
         <div className="flex items-start">
           <Info className="w-5 h-5 text-blue-600 mr-2 mt-0.5 flex-shrink-0" />
           <div className="text-sm text-blue-800">
-            <p className="font-medium mb-1">About Webhook Testing</p>
-            <p>These tests simulate how Twilio calls your webhooks. A 401 "authentication required" response means the function exists but is properly secured. Real Twilio calls include authentication headers that these tests don't have.</p>
+            <p className="font-medium mb-1">About Telnyx Webhook Testing</p>
+            <p>These tests verify your Telnyx Edge Functions are deployed and accessible. Some tests may show warnings due to missing Telnyx credentials or authentication, which is normal for testing.</p>
           </div>
         </div>
       </div>
@@ -258,14 +226,24 @@ export default function WebhookTester() {
             }`}></div>
             <span>Supabase Key: {import.meta.env.VITE_SUPABASE_ANON_KEY ? '✅' : '❌ Missing'}</span>
           </div>
+          <div className="flex items-center">
+            <div className={`w-3 h-3 rounded-full mr-2 ${
+              import.meta.env.VITE_TELNYX_API_KEY ? 'bg-green-500' : 'bg-red-500'
+            }`}></div>
+            <span>Telnyx API Key: {import.meta.env.VITE_TELNYX_API_KEY ? '✅' : '❌ Missing'}</span>
+          </div>
+          <div className="flex items-center">
+            <div className={`w-3 h-3 rounded-full mr-2 ${
+              import.meta.env.VITE_TELNYX_CONNECTION_ID ? 'bg-green-500' : 'bg-red-500'
+            }`}></div>
+            <span>Telnyx Connection: {import.meta.env.VITE_TELNYX_CONNECTION_ID ? '✅' : '❌ Missing'}</span>
+          </div>
         </div>
         
         <div className="mt-3 text-xs text-gray-600">
-          <p><strong>Twilio Webhook URLs (copy these to Twilio Console):</strong></p>
+          <p><strong>Telnyx Webhook URL (configure in Telnyx Portal):</strong></p>
           <div className="bg-white p-2 rounded border mt-1 font-mono text-xs">
-            <p>Voice: {import.meta.env.VITE_SUPABASE_URL}/functions/v1/twiml-voice</p>
-            <p>Status: {import.meta.env.VITE_SUPABASE_URL}/functions/v1/twiml-status</p>
-            <p>Fallback: {import.meta.env.VITE_SUPABASE_URL}/functions/v1/twiml-status</p>
+            <p>Webhook: {import.meta.env.VITE_SUPABASE_URL}/functions/v1/telnyx-webhook</p>
           </div>
         </div>
       </div>
@@ -327,12 +305,13 @@ export default function WebhookTester() {
         <h3 className="font-medium text-blue-900 mb-3">What the Results Mean</h3>
         <div className="text-sm text-blue-800 space-y-2">
           <p><strong>✅ Green (Success):</strong> Function is working correctly</p>
-          <p><strong>⚠️ Yellow (Warning):</strong> Function exists but has authentication/configuration issues</p>
+          <p><strong>⚠️ Yellow (Warning):</strong> Function exists but has configuration/authentication issues</p>
           <p><strong>❌ Red (Error):</strong> Function not found or network error</p>
-          <p className="mt-3 font-medium">If Twilio says "application error occurred":</p>
-          <p>• Check that TwiML Voice shows green or yellow (not red)</p>
-          <p>• Look at Supabase Function logs for error details</p>
-          <p>• Verify Twilio webhook URLs match exactly</p>
+          <p className="mt-3 font-medium">If you're not hearing AI voice during calls:</p>
+          <p>• Ensure Telnyx Initiate shows green or yellow (not red)</p>
+          <p>• Check Supabase Edge Function environment variables</p>
+          <p>• Verify OpenAI API key and Telnyx AI configuration</p>
+          <p>• Look at Supabase Function logs for detailed errors</p>
         </div>
       </div>
     </div>
