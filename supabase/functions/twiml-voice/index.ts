@@ -56,13 +56,6 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Check if this looks like a Twilio request
-    const userAgent = req.headers.get('user-agent') || '';
-    const isTwilioRequest = userAgent.includes('TwilioProxy') || userAgent.includes('Twilio');
-    const hasTwilioSignature = req.headers.get('x-twilio-signature');
-    
-    console.log('Request analysis:', { isTwilioRequest, hasTwilioSignature: !!hasTwilioSignature });
-
     // Get Twilio webhook data
     let formData;
     try {
@@ -126,10 +119,14 @@ Deno.serve(async (req: Request) => {
 
     // Update call status in database (only for real calls, not tests)
     if (!callId.startsWith('test-')) {
+      console.log('Updating call status to in-progress and initializing transcript');
+      
       const { error: updateError } = await supabase
         .from('call_records')
         .update({ 
           status: 'in-progress',
+          // Initialize transcript with opening message
+          result_transcript: `Assistente: ${openingMessage}`,
           // Update additional context with Twilio SID
           additional_context: JSON.stringify({
             ...callDetails,
@@ -140,6 +137,8 @@ Deno.serve(async (req: Request) => {
 
       if (updateError) {
         console.error('Failed to update call record:', updateError);
+      } else {
+        console.log('Successfully updated call record with opening message');
       }
     }
 

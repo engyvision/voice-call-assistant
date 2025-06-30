@@ -30,7 +30,7 @@ async function checkSupabaseConnection(): Promise<boolean> {
   }
 }
 
-// Real-time subscription for call updates with improved error handling
+// Enhanced real-time subscription for call updates with better error handling
 export function subscribeToCallUpdates(callId: string, callback: (callRecord: CallRecord) => void) {
   console.log('Setting up real-time subscription for call:', callId);
   
@@ -67,6 +67,12 @@ export function subscribeToCallUpdates(callId: string, callback: (callRecord: Ca
             completedAt: data.completed_at,
             duration: data.duration || 0
           };
+          
+          console.log('Transformed call record for real-time update:', {
+            id: callRecord.id,
+            status: callRecord.status,
+            transcriptLength: callRecord.result?.transcript?.length || 0
+          });
           
           callback(callRecord);
         } catch (error) {
@@ -115,6 +121,8 @@ export async function initiateCall(request: CallRequest): Promise<ApiResponse<st
       console.error('Failed to create call record:', createError);
       return { success: false, error: 'Failed to create call record' };
     }
+
+    console.log('Created call record:', callRecord.id);
 
     // Then initiate Twilio call via edge function
     const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/twilio-initiate`, {
@@ -166,6 +174,8 @@ export async function initiateCall(request: CallRequest): Promise<ApiResponse<st
       
       return { success: false, error: result.error || 'Failed to initiate call' };
     }
+
+    console.log('Call initiated successfully:', result.twilioSid);
 
     // Set up a timeout to mark call as failed if it stays in dialing too long
     setTimeout(async () => {

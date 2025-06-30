@@ -106,6 +106,15 @@ Deno.serve(async (req: Request) => {
     // Process speech with AI to generate intelligent response
     const aiResponse = await processWithAI(speechResult, callRecord, conversationHistory);
     
+    console.log('AI Response generated:', {
+      text: aiResponse.text,
+      shouldContinue: aiResponse.shouldContinue,
+      conversationLength: conversationHistory.length
+    });
+
+    // Update call record with conversation progress BEFORE generating TwiML
+    await updateCallProgress(callId, speechResult, aiResponse, conversationHistory);
+
     // Check if this should end the call
     if (!aiResponse.shouldContinue) {
       console.log('AI determined call should end, generating hangup TwiML');
@@ -129,12 +138,7 @@ Deno.serve(async (req: Request) => {
     // Generate appropriate TwiML response based on AI decision
     const twiml = generateResponseTwiML(aiResponse, callId);
 
-    // Update call record with conversation progress (only for real calls)
-    if (!callId.startsWith('test-')) {
-      await updateCallProgress(callId, speechResult, aiResponse, conversationHistory);
-    }
-
-    console.log('Generated AI response:', aiResponse);
+    console.log('Generated TwiML response for continued conversation');
 
     return new Response(twiml, {
       headers: { 'Content-Type': 'text/xml', ...corsHeaders }
@@ -419,6 +423,13 @@ async function updateCallProgress(
   aiResponse: { text: string; shouldContinue: boolean }, 
   currentHistory: ConversationTurn[]
 ): Promise<void> {
+  console.log('Updating call progress:', {
+    callId,
+    userSpeech: userSpeech.substring(0, 50) + '...',
+    aiResponse: aiResponse.text.substring(0, 50) + '...',
+    historyLength: currentHistory.length
+  });
+
   const newHistory = [
     ...currentHistory,
     {
@@ -440,6 +451,8 @@ async function updateCallProgress(
     `${turn.speaker === 'ai' ? 'Assistente' : 'Pessoa'}: ${turn.text}`
   ).join('\n');
 
+  console.log('Generated transcript:', transcript.substring(0, 200) + '...');
+
   const updateData: any = {
     result_transcript: transcript,
     status: 'in-progress'
@@ -453,10 +466,16 @@ async function updateCallProgress(
     updateData.result_message = 'Call completed successfully';
   }
 
-  await supabase
+  const { error } = await supabase
     .from('call_records')
     .update(updateData)
     .eq('id', callId);
+
+  if (error) {
+    console.error('Failed to update call progress:', error);
+  } else {
+    console.log('Successfully updated call progress for:', callId);
+  }
 }
 
 function shouldEndCall(text: string): boolean {
