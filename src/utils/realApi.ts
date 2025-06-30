@@ -275,6 +275,49 @@ export async function getAllCalls(): Promise<ApiResponse<CallRecord[]>> {
   }
 }
 
+// Real-time subscription for call updates
+export function subscribeToCallUpdates(callId: string, callback: (callRecord: CallRecord) => void) {
+  const subscription = supabase
+    .channel(`call-${callId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'call_records',
+        filter: `id=eq.${callId}`
+      },
+      async (payload) => {
+        console.log('Real-time call update received:', payload);
+        
+        // Transform the updated record
+        const data = payload.new;
+        const callRecord: CallRecord = {
+          id: data.id,
+          recipientName: data.recipient_name,
+          phoneNumber: data.phone_number,
+          callGoal: data.call_goal,
+          additionalContext: data.additional_context || '',
+          status: data.status,
+          result: data.result_success !== null ? {
+            success: data.result_success,
+            message: data.result_message || '',
+            details: data.result_details || '',
+            transcript: data.result_transcript || ''
+          } : null,
+          createdAt: data.created_at,
+          completedAt: data.completed_at,
+          duration: data.duration || 0
+        };
+        
+        callback(callRecord);
+      }
+    )
+    .subscribe();
+
+  return subscription;
+}
+
 // Keep the mock simulation function for development/testing
 export function simulateCallProgress(callId: string): void {
   // This function is no longer needed as real calls will update via webhooks

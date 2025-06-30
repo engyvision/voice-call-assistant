@@ -37,6 +37,8 @@ interface AIResponse {
   confidence: number;
   shouldContinue: boolean;
   nextAction?: 'gather_info' | 'confirm' | 'end_call' | 'clarify';
+  needsAssistance?: boolean;
+  assistanceQuestion?: string;
 }
 
 Deno.serve(async (req: Request) => {
@@ -53,7 +55,7 @@ Deno.serve(async (req: Request) => {
       url: req.url
     });
 
-    const { callId, userInput, conversationHistory } = await req.json();
+    const { callId, userInput, conversationHistory, isAssistantInput } = await req.json();
 
     if (!callId || !userInput) {
       return new Response(JSON.stringify({
@@ -87,20 +89,31 @@ Deno.serve(async (req: Request) => {
     const aiResponse = await generateAIResponse(
       callRecord,
       userInput,
-      conversationHistory || []
+      conversationHistory || [],
+      isAssistantInput || false
     );
 
-    // Generate voice audio
-    const voiceResponse = await generateVoiceAudio(aiResponse.text);
+    // Generate voice audio if needed
+    let voiceResponse = null;
+    if (!isAssistantInput) {
+      voiceResponse = await generateVoiceAudio(aiResponse.text);
+    }
 
     // Update conversation history in database
-    await updateConversationHistory(callId, userInput, aiResponse.text, conversationHistory || []);
+    await updateConversationHistory(callId, userInput, aiResponse.text, conversationHistory || [], isAssistantInput);
+
+    // Check if AI needs assistance and create a pending question
+    if (aiResponse.needsAssistance && aiResponse.assistanceQuestion) {
+      await createPendingQuestion(callId, aiResponse.assistanceQuestion, userInput);
+    }
 
     return new Response(JSON.stringify({
       success: true,
       aiResponse,
       voiceResponse,
-      shouldContinue: aiResponse.shouldContinue
+      shouldContinue: aiResponse.shouldContinue,
+      needsAssistance: aiResponse.needsAssistance,
+      assistanceQuestion: aiResponse.assistanceQuestion
     }), {
       headers: { 'Content-Type': 'application/json', ...corsHeaders }
     });
@@ -120,16 +133,17 @@ Deno.serve(async (req: Request) => {
 async function generateAIResponse(
   callRecord: any,
   userInput: string,
-  conversationHistory: ConversationTurn[]
+  conversationHistory: ConversationTurn[],
+  isAssistantInput: boolean = false
 ): Promise<AIResponse> {
   const systemPrompt = buildSystemPrompt(callRecord);
   const conversationText = formatConversationHistory(conversationHistory);
 
   try {
     if (AI_PROVIDER === 'openai' && OPENAI_API_KEY) {
-      return await callOpenAI(systemPrompt, conversationText, userInput);
+      return await callOpenAI(systemPrompt, conversationText, userInput, isAssistantInput);
     } else if (AI_PROVIDER === 'claude' && CLAUDE_API_KEY) {
-      return await callClaude(systemPrompt, conversationText, userInput);
+      return await callClaude(systemPrompt, conversationText, userInput, isAssistantInput);
     } else {
       throw new Error('No AI provider configured');
     }
@@ -161,19 +175,27 @@ INSTRUÇÕES IMPORTANTES:
 5. Faça perguntas claras quando precisar de informações
 6. Confirme informações importantes
 7. Agradeça sempre pela atenção
+8. Se não souber uma informação específica, seja honesto sobre isso
+
+QUANDO PRECISAR DE AJUDA:
+- Se a pessoa perguntar sobre preços, horários específicos, disponibilidade ou detalhes que você não tem
+- Se precisar de informações técnicas específicas sobre produtos/serviços
+- Se a pessoa fizer uma pergunta que requer conhecimento interno da empresa
+- Diga algo como "Deixe-me verificar essa informação para você" e continue a conversa
 
 REGRAS DE CONVERSA:
 - Se não entender algo, peça para repetir educadamente
 - Se a pessoa estiver ocupada, ofereça para ligar em outro momento
 - Se conseguir o objetivo, confirme os detalhes e agradeça
 - Se não conseguir, agradeça e termine educadamente
+- Se não souber uma resposta, seja honesto mas mantenha a conversa fluindo
 
 FORMATO DE RESPOSTA:
 - Responda apenas com o texto que deve ser falado
 - Não inclua ações ou descrições entre parênteses
 - Mantenha tom conversacional e natural
 
-Lembre-se: Você está representando seu cliente, seja profissional e eficiente.`;
+Lembre-se: Você está representando seu cliente, seja profissional e eficiente. É melhor admitir que não sabe algo do que inventar informações.`;
 }
 
 function formatConversationHistory(history: ConversationTurn[]): string {
@@ -186,8 +208,11 @@ function formatConversationHistory(history: ConversationTurn[]): string {
 async function callOpenAI(
   systemPrompt: string,
   conversationHistory: string,
-  userInput: string
+  userInput: string,
+  isAssistantInput: boolean
 ): Promise<AIResponse> {
+  const inputPrefix = isAssistantInput ? '[INFORMAÇÃO FORNECIDA PELO OPERADOR] ' : '';
+  
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -200,7 +225,7 @@ async function callOpenAI(
         { role: 'system', content: systemPrompt },
         { 
           role: 'user', 
-          content: `Histórico da conversa:\n${conversationHistory}\n\nÚltima fala da pessoa: ${userInput}\n\nResponda naturalmente em português:` 
+          content: `Histórico da conversa:\n${conversationHistory}\n\nÚltima fala da pessoa: ${inputPrefix}${userInput}\n\nResponda naturalmente em português:` 
         }
       ],
       temperature: AI_TEMPERATURE,
@@ -218,20 +243,29 @@ async function callOpenAI(
   const data = await response.json();
   const aiText = data.choices[0]?.message?.content?.trim() || '';
 
+  // Check if AI needs assistance
+  const needsAssistance = checkIfNeedsAssistance(aiText, userInput);
+  const assistanceQuestion = needsAssistance ? extractAssistanceQuestion(userInput) : undefined;
+
   return {
     text: aiText,
     confidence: 0.9,
     shouldContinue: !shouldEndCall(aiText),
     intent: extractIntent(aiText),
-    nextAction: determineNextAction(aiText)
+    nextAction: determineNextAction(aiText),
+    needsAssistance,
+    assistanceQuestion
   };
 }
 
 async function callClaude(
   systemPrompt: string,
   conversationHistory: string,
-  userInput: string
+  userInput: string,
+  isAssistantInput: boolean
 ): Promise<AIResponse> {
+  const inputPrefix = isAssistantInput ? '[INFORMAÇÃO FORNECIDA PELO OPERADOR] ' : '';
+  
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -247,7 +281,7 @@ async function callClaude(
       messages: [
         {
           role: 'user',
-          content: `Histórico da conversa:\n${conversationHistory}\n\nÚltima fala da pessoa: ${userInput}\n\nResponda naturalmente em português:`
+          content: `Histórico da conversa:\n${conversationHistory}\n\nÚltima fala da pessoa: ${inputPrefix}${userInput}\n\nResponda naturalmente em português:`
         }
       ]
     })
@@ -261,13 +295,68 @@ async function callClaude(
   const data = await response.json();
   const aiText = data.content[0]?.text?.trim() || '';
 
+  // Check if AI needs assistance
+  const needsAssistance = checkIfNeedsAssistance(aiText, userInput);
+  const assistanceQuestion = needsAssistance ? extractAssistanceQuestion(userInput) : undefined;
+
   return {
     text: aiText,
     confidence: 0.9,
     shouldContinue: !shouldEndCall(aiText),
     intent: extractIntent(aiText),
-    nextAction: determineNextAction(aiText)
+    nextAction: determineNextAction(aiText),
+    needsAssistance,
+    assistanceQuestion
   };
+}
+
+function checkIfNeedsAssistance(aiResponse: string, userInput: string): boolean {
+  const uncertaintyPhrases = [
+    'não tenho essa informação',
+    'preciso verificar',
+    'não sei',
+    'vou precisar consultar',
+    'não tenho certeza',
+    'deixe-me verificar',
+    'preciso confirmar'
+  ];
+
+  const questionTypes = [
+    'quanto custa',
+    'qual o preço',
+    'que horas',
+    'quando',
+    'vocês têm',
+    'está disponível',
+    'how much',
+    'what time',
+    'do you have',
+    'is available'
+  ];
+
+  const aiLower = aiResponse.toLowerCase();
+  const userLower = userInput.toLowerCase();
+
+  // Check if AI expressed uncertainty
+  const aiUncertain = uncertaintyPhrases.some(phrase => aiLower.includes(phrase));
+  
+  // Check if user asked a specific question that might need assistance
+  const userAskedSpecificQuestion = questionTypes.some(type => userLower.includes(type));
+
+  return aiUncertain || userAskedSpecificQuestion;
+}
+
+function extractAssistanceQuestion(userInput: string): string {
+  // Extract the core question from user input
+  const questionMarkers = ['quanto', 'qual', 'quando', 'onde', 'como', 'vocês têm', 'está disponível'];
+  
+  for (const marker of questionMarkers) {
+    if (userInput.toLowerCase().includes(marker)) {
+      return `Customer asked: "${userInput}" - Please provide the specific information needed.`;
+    }
+  }
+  
+  return `Customer inquiry: "${userInput}" - Please provide relevant information.`;
 }
 
 async function generateVoiceAudio(text: string): Promise<any> {
@@ -346,23 +435,28 @@ async function updateConversationHistory(
   callId: string,
   userInput: string,
   aiResponse: string,
-  currentHistory: ConversationTurn[]
+  currentHistory: ConversationTurn[],
+  isAssistantInput: boolean = false
 ): Promise<void> {
-  const newHistory = [
-    ...currentHistory,
-    {
+  const newHistory = [...currentHistory];
+  
+  if (!isAssistantInput) {
+    // Add human input
+    newHistory.push({
       timestamp: new Date().toISOString(),
       speaker: 'human' as const,
       text: userInput,
       confidence: 0.9
-    },
-    {
-      timestamp: new Date().toISOString(),
-      speaker: 'ai' as const,
-      text: aiResponse,
-      confidence: 0.9
-    }
-  ];
+    });
+  }
+  
+  // Add AI response
+  newHistory.push({
+    timestamp: new Date().toISOString(),
+    speaker: 'ai' as const,
+    text: aiResponse,
+    confidence: 0.9
+  });
 
   // Update the call record with new conversation history
   const transcript = newHistory.map(turn => 
@@ -376,6 +470,42 @@ async function updateConversationHistory(
       status: 'in-progress'
     })
     .eq('id', callId);
+}
+
+async function createPendingQuestion(callId: string, question: string, context: string): Promise<void> {
+  // Store pending questions in a separate table or as part of call record
+  // For now, we'll add it to the additional_context field
+  const { data: callRecord } = await supabase
+    .from('call_records')
+    .select('additional_context')
+    .eq('id', callId)
+    .single();
+
+  if (callRecord) {
+    let contextData;
+    try {
+      contextData = JSON.parse(callRecord.additional_context || '{}');
+    } catch {
+      contextData = { originalContext: callRecord.additional_context || '' };
+    }
+
+    if (!contextData.pendingQuestions) {
+      contextData.pendingQuestions = [];
+    }
+
+    contextData.pendingQuestions.push({
+      id: Date.now().toString(),
+      question,
+      context,
+      timestamp: new Date().toISOString(),
+      answered: false
+    });
+
+    await supabase
+      .from('call_records')
+      .update({ additional_context: JSON.stringify(contextData) })
+      .eq('id', callId);
+  }
 }
 
 function shouldEndCall(text: string): boolean {

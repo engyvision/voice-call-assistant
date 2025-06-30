@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Phone, Clock, CheckCircle, XCircle, PhoneCall, Loader2, RefreshCw, Brain, Volume2, AlertTriangle } from 'lucide-react';
+import { Phone, Clock, CheckCircle, XCircle, PhoneCall, Loader2, RefreshCw, Brain, Volume2, AlertTriangle, Monitor } from 'lucide-react';
 import { CallRecord, CallStatus as CallStatusType, ErrorLog } from '../types';
 import { ErrorHandler } from '../utils/errorHandler';
+import RealTimeCallInterface from './RealTimeCallInterface';
 
 interface CallStatusProps {
   callRecord: CallRecord;
@@ -52,6 +53,7 @@ export default function CallStatus({ callRecord, onComplete, onRefresh }: CallSt
   const [errorLogs, setErrorLogs] = useState<ErrorLog[]>([]);
   const [showErrorDetails, setShowErrorDetails] = useState(false);
   const [conversationTurns, setConversationTurns] = useState(0);
+  const [showRealTimeInterface, setShowRealTimeInterface] = useState(false);
 
   const config = statusConfig[callRecord.status];
   const IconComponent = config.icon;
@@ -67,6 +69,11 @@ export default function CallStatus({ callRecord, onComplete, onRefresh }: CallSt
         line.startsWith('Assistente:') || line.startsWith('Pessoa:')
       ).length;
       setConversationTurns(turns);
+    }
+
+    // Auto-show real-time interface for in-progress calls
+    if (callRecord.status === 'in-progress') {
+      setShowRealTimeInterface(true);
     }
   }, [callRecord]);
 
@@ -109,6 +116,26 @@ export default function CallStatus({ callRecord, onComplete, onRefresh }: CallSt
 
   const systemHealthy = errorHandler.isSystemHealthy();
 
+  // Show real-time interface for in-progress calls
+  if (showRealTimeInterface && callRecord.status === 'in-progress') {
+    return (
+      <div className="space-y-4">
+        <div className="flex justify-center">
+          <button
+            onClick={() => setShowRealTimeInterface(false)}
+            className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors text-sm"
+          >
+            ← Back to Simple View
+          </button>
+        </div>
+        <RealTimeCallInterface 
+          callRecord={callRecord} 
+          onComplete={onComplete}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-2xl mx-auto">
       <div className="text-center">
@@ -122,6 +149,22 @@ export default function CallStatus({ callRecord, onComplete, onRefresh }: CallSt
 
         <h2 className="text-3xl font-bold text-gray-900 mb-2">{config.message}</h2>
         <p className="text-gray-600 mb-6">{config.description}</p>
+
+        {/* Real-time Interface Button for In-Progress Calls */}
+        {callRecord.status === 'in-progress' && (
+          <div className="mb-6">
+            <button
+              onClick={() => setShowRealTimeInterface(true)}
+              className="flex items-center justify-center mx-auto px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+            >
+              <Monitor className="w-5 h-5 mr-2" />
+              View Live Call Monitor
+            </button>
+            <p className="text-sm text-gray-500 mt-2">
+              See real-time conversation and assist the AI when needed
+            </p>
+          </div>
+        )}
 
         {/* System Health Indicator */}
         <div className="flex items-center justify-center mb-4">
