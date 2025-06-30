@@ -107,6 +107,23 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
+      {/* Bolt.new Badge */}
+      <div className="fixed top-4 right-4 z-50">
+        <a
+          href="https://bolt.new"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block transition-transform hover:scale-105"
+          title="Powered by Bolt.new"
+        >
+          <img
+            src="/black_circle_360x360.png"
+            alt="Powered by Bolt.new"
+            className="w-16 h-16 rounded-full shadow-lg hover:shadow-xl transition-shadow"
+          />
+        </a>
+      </div>
+
       {/* Connection Error Banner */}
       {connectionError && (
         <div className="bg-red-50 border-b border-red-200 px-4 py-3">
@@ -127,7 +144,7 @@ function App() {
       )}
 
       {/* Header */}
-      <header className="bg-white/80 backdrop-blur-sm border-b border-gray-200 sticky top-0 z-50">
+      <header className="bg-white/80 backdrop-blur-sm border-b border-gray-200 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center space-x-3">
@@ -140,7 +157,7 @@ function App() {
               </div>
             </div>
 
-            <nav className="flex space-x-4">
+            <nav className="flex space-x-4 mr-20">
               <button
                 onClick={() => handleViewChange('form')}
                 className={`px-4 py-2 rounded-lg font-medium transition-colors ${
