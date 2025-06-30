@@ -1,108 +1,283 @@
-# 🚀 Supabase Edge Function Deployment Instructions
+import { createClient } from 'npm:@supabase/supabase-js@2';
 
-## ⚠️ Important: Manual Deployment Required
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Telnyx-Signature",
+};
 
-Since we're in a WebContainer environment, the Supabase CLI is not available. You need to manually deploy the Edge Functions through the Supabase Dashboard.
+// Initialize Supabase client
+const supabase = createClient(
+  Deno.env.get('SUPABASE_URL') ?? '',
+  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+);
 
-## 📋 Step-by-Step Deployment Process
+// Initialize conversation state
+const conversationState = new Map();
 
-### Step 1: Access Your Supabase Dashboard
-1. Go to [https://supabase.com/dashboard](https://supabase.com/dashboard)
-2. Sign in to your account
-3. Select your project
+// Helper function to make Telnyx API calls
+async function telnyxApiCall(endpoint: string, method: string, body?: any) {
+  const TELNYX_API_KEY = Deno.env.get('TELNYX_API_KEY');
+  
+  const response = await fetch(`https://api.telnyx.com/v2/${endpoint}`, {
+    method,
+    headers: {
+      'Authorization': `Bearer ${TELNYX_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
 
-### Step 2: Navigate to Edge Functions
-1. In the left sidebar, click on **"Edge Functions"**
-2. You should see the Edge Functions management interface
+  if (!response.ok) {
+    const error = await response.text();
+    console.error('Telnyx API error:', error);
+    throw new Error(`Telnyx API error: ${response.status}`);
+  }
 
-### Step 3: Deploy telnyx-webhook Function
-1. Click **"Create Function"** or **"New Function"**
-2. Set the function name as: `telnyx-webhook`
-3. Copy the entire code from the file `supabase/functions/telnyx-webhook/index.ts`
-4. Paste it into the function editor
-5. Click **"Deploy"** or **"Save"**
+  return response.json();
+}
 
-### Step 4: Deploy telnyx-initiate Function (if needed)
-1. Click **"Create Function"** again
-2. Set the function name as: `telnyx-initiate`
-3. Copy the entire code from the file `supabase/functions/telnyx-initiate/index.ts`
-4. Paste it into the function editor
-5. Click **"Deploy"** or **"Save"**
+// Function to generate AI response using OpenAI
+async function generateAIResponse(prompt: string, context: any) {
+  const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
+  
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a professional AI assistant making a phone call.
+CALL OBJECTIVE: ${context.callGoal}
+RECIPIENT: ${context.recipientName}
+CONTEXT: ${context.additionalContext || 'No additional context'}
 
-### Step 5: Configure Environment Variables
-1. In the Edge Functions section, look for **"Settings"** or **"Environment Variables"**
-2. Add the following required variables:
+INSTRUCTIONS:
+- Be polite, professional, and natural
+- Keep responses concise (2-3 sentences max)
+- Be specific about the call objective
+- Ask clear questions when needed
+- Thank the person for their time`
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature: 0.7,
+      max_tokens: 150
+    })
+  });
 
-```
-TELNYX_API_KEY=your_telnyx_api_key_here
-TELNYX_CONNECTION_ID=your_telnyx_connection_id_here
-TELNYX_PHONE_NUMBER=+351210600099
-OPENAI_API_KEY=your_openai_api_key_here
-AI_PROVIDER=openai
-AI_MODEL=gpt-4o
-SUPABASE_URL=your_supabase_project_url
-SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-```
+  if (!response.ok) {
+    throw new Error('OpenAI API error');
+  }
 
-### Step 6: Verify Deployment
-1. After deployment, you should see both functions listed in your Edge Functions dashboard
-2. Each function should show a "Deployed" or "Active" status
-3. Note the function URLs - they should be in the format:
-   - `https://your-project-id.supabase.co/functions/v1/telnyx-webhook`
-   - `https://your-project-id.supabase.co/functions/v1/telnyx-initiate`
+  const data = await response.json();
+  return data.choices[0].message.content;
+}
 
-## 🧪 Test Your Deployment
+// Function to convert text to speech URL using AWS Polly (via Telnyx)
+async function textToSpeechUrl(text: string, callControlId: string) {
+  // Telnyx can handle TTS directly via the speak command
+  return { text, voice: 'Polly.Joanna-Neural' };
+}
 
-### Quick Test Commands
-You can test if the functions are accessible by running these in your browser's console or using a tool like Postman:
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, {
+      status: 200,
+      headers: corsHeaders,
+    });
+  }
 
-```javascript
-// Test telnyx-webhook
-fetch('https://your-project-id.supabase.co/functions/v1/telnyx-webhook?callId=test-123')
-  .then(response => response.text())
-  .then(data => console.log('Webhook test:', data));
+  try {
+    // Get callId from URL parameters
+    const url = new URL(req.url);
+    const callId = url.searchParams.get('callId');
+    
+    if (!callId) {
+      return new Response('Missing callId', {
+        status: 400,
+        headers: corsHeaders
+      });
+    }
 
-// Test telnyx-initiate  
-fetch('https://your-project-id.supabase.co/functions/v1/telnyx-initiate?callId=test-123')
-  .then(response => response.text())
-  .then(data => console.log('Initiate test:', data));
-```
+    // Handle test requests
+    if (callId?.startsWith('test-')) {
+      return new Response('Test OK - Telnyx webhook is accessible', {
+        headers: corsHeaders
+      });
+    }
 
-### Expected Results
-- **telnyx-webhook**: Should return "Test OK - Telnyx webhook is accessible"
-- **telnyx-initiate**: Should NOT return a 404 error
+    // Parse webhook data
+    const webhookData = await req.json();
+    const eventType = webhookData.data?.event_type;
+    const payload = webhookData.data?.payload;
 
-## 🔧 Troubleshooting
+    if (!eventType || !payload) {
+      return new Response('Invalid payload', {
+        status: 400,
+        headers: corsHeaders
+      });
+    }
 
-### If Functions Don't Deploy:
-1. Check that you copied the entire code content
-2. Ensure there are no syntax errors in the code
-3. Verify your Supabase project has Edge Functions enabled
+    console.log('Webhook event:', eventType, 'for call:', callId);
 
-### If Environment Variables Don't Work:
-1. Double-check all variable names are exactly as shown
-2. Ensure no extra spaces in variable names or values
-3. Verify your API keys are valid and active
+    // Get call record from database
+    const { data: currentCall, error: fetchError } = await supabase
+      .from('call_records')
+      .select('*')
+      .eq('id', callId)
+      .single();
 
-### If Functions Return Errors:
-1. Check the function logs in the Supabase Dashboard
-2. Verify all required environment variables are set
-3. Test your API keys independently
+    if (fetchError || !currentCall) {
+      console.error('Call record not found:', fetchError);
+      return new Response('Call record not found', {
+        status: 404,
+        headers: corsHeaders
+      });
+    }
 
-## ✅ Success Indicators
+    const callControlId = payload.call_control_id;
+    let updateData: any = {};
 
-Once successfully deployed, you should be able to:
-1. See both functions in your Supabase Edge Functions dashboard
-2. Make test calls without getting 404 errors
-3. See function execution logs when testing
-4. Use the Diagnostics tool in your app successfully
+    switch (eventType) {
+      case 'call.initiated':
+        updateData.status = 'dialing';
+        console.log('Call initiated');
+        break;
 
-## 🆘 Need Help?
+      case 'call.answered':
+        updateData.status = 'in-progress';
+        console.log('Call answered - starting AI conversation');
+        
+        // Initialize conversation state
+        conversationState.set(callId, {
+          recipientName: currentCall.recipient_name,
+          callGoal: currentCall.call_goal,
+          additionalContext: currentCall.additional_context,
+          transcript: []
+        });
 
-If you encounter issues:
-1. Check the Supabase Dashboard for error messages
-2. Review the function logs for specific error details
-3. Verify all environment variables are correctly set
-4. Ensure your Telnyx and OpenAI API keys are valid
+        // Start the conversation with initial greeting
+        const initialMessage = `Hello, this is an AI assistant calling on behalf of my client regarding ${currentCall.call_goal.toLowerCase()}. Am I speaking with ${currentCall.recipient_name}?`;
+        
+        // Use Telnyx speak command to say the greeting
+        await telnyxApiCall(`calls/${callControlId}/actions/speak`, 'POST', {
+          payload: initialMessage,
+          voice: 'Polly.Joanna-Neural',
+          language: 'en-US'
+        });
 
-Remember: This manual deployment is a one-time setup. Once deployed, the functions will remain active and accessible for your application.
+        // After speaking, start gathering user response
+        await telnyxApiCall(`calls/${callControlId}/actions/gather`, 'POST', {
+          minimum_digit_count: 0,
+          maximum_digit_count: 0,
+          timeout_millis: 30000,
+          inter_digit_timeout_millis: 5000,
+          speech_model: 'deepgram',
+          speech_timeout_millis: 5000
+        });
+        
+        break;
+
+      case 'call.speak.ended':
+        console.log('AI finished speaking - gathering user input');
+        
+        // Start gathering user response after AI finishes speaking
+        await telnyxApiCall(`calls/${callControlId}/actions/gather`, 'POST', {
+          minimum_digit_count: 0,
+          maximum_digit_count: 0,
+          timeout_millis: 30000,
+          inter_digit_timeout_millis: 5000,
+          speech_model: 'deepgram',
+          speech_timeout_millis: 5000
+        });
+        break;
+
+      case 'call.gather.ended':
+        console.log('User finished speaking - processing response');
+        
+        if (payload.speech_result) {
+          const userInput = payload.speech_result;
+          const state = conversationState.get(callId);
+          
+          if (state) {
+            // Add to transcript
+            state.transcript.push({ speaker: 'user', text: userInput });
+            
+            // Generate AI response
+            const aiResponse = await generateAIResponse(userInput, state);
+            state.transcript.push({ speaker: 'assistant', text: aiResponse });
+            
+            // Update transcript in database
+            updateData.result_transcript = state.transcript
+              .map(t => `${t.speaker === 'user' ? 'Pessoa' : 'Assistente'}: ${t.text}`)
+              .join('\n');
+            
+            // Speak the AI response
+            await telnyxApiCall(`calls/${callControlId}/actions/speak`, 'POST', {
+              payload: aiResponse,
+              voice: 'Polly.Joanna-Neural',
+              language: 'en-US'
+            });
+          }
+        }
+        break;
+
+      case 'call.hangup':
+        const duration = payload.hangup_cause === 'normal_clearing' ? 
+          Math.floor((Date.now() - new Date(currentCall.created_at).getTime()) / 1000) : 0;
+        
+        updateData.status = 'completed';
+        updateData.duration = duration;
+        updateData.completed_at = new Date().toISOString();
+        updateData.result_success = duration > 10;
+        updateData.result_message = payload.hangup_cause === 'normal_clearing' ? 
+          'Call completed successfully' : `Call ended: ${payload.hangup_cause}`;
+        
+        // Clean up conversation state
+        conversationState.delete(callId);
+        
+        console.log('Call ended:', payload.hangup_cause);
+        break;
+
+      default:
+        console.log('Unhandled event type:', eventType);
+        break;
+    }
+
+    // Update database if there are changes
+    if (Object.keys(updateData).length > 0) {
+      const { error: updateError } = await supabase
+        .from('call_records')
+        .update(updateData)
+        .eq('id', callId);
+
+      if (updateError) {
+        console.error('Failed to update call record:', updateError);
+        return new Response('Database update failed', {
+          status: 500,
+          headers: corsHeaders
+        });
+      }
+    }
+
+    return new Response('OK', {
+      headers: corsHeaders
+    });
+
+  } catch (error) {
+    console.error('Telnyx webhook error:', error);
+    return new Response('Error', {
+      status: 500,
+      headers: corsHeaders
+    });
+  }
+});
