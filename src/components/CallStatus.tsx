@@ -54,6 +54,7 @@ export default function CallStatus({ callRecord, onComplete, onRefresh }: CallSt
   const [showErrorDetails, setShowErrorDetails] = useState(false);
   const [conversationTurns, setConversationTurns] = useState(0);
   const [showRealTimeInterface, setShowRealTimeInterface] = useState(false);
+  const [displayDuration, setDisplayDuration] = useState(0);
 
   const config = statusConfig[callRecord.status];
   const IconComponent = config.icon;
@@ -75,6 +76,26 @@ export default function CallStatus({ callRecord, onComplete, onRefresh }: CallSt
     if (callRecord.status === 'in-progress') {
       setShowRealTimeInterface(true);
     }
+
+    // Set display duration based on call status
+    if (callRecord.status === 'completed' || callRecord.status === 'failed') {
+      // Use the final duration from database for completed calls
+      console.log('Call completed, using database duration:', callRecord.duration);
+      setDisplayDuration(callRecord.duration);
+    } else {
+      // For active calls, calculate elapsed time
+      const startTime = new Date(callRecord.createdAt).getTime();
+      const updateDuration = () => {
+        const now = Date.now();
+        const elapsed = Math.floor((now - startTime) / 1000);
+        setDisplayDuration(elapsed);
+      };
+      
+      updateDuration(); // Set initial value
+      const interval = setInterval(updateDuration, 1000);
+      
+      return () => clearInterval(interval);
+    }
   }, [callRecord]);
 
   const formatTime = (seconds: number) => {
@@ -89,16 +110,6 @@ export default function CallStatus({ callRecord, onComplete, onRefresh }: CallSt
       await onRefresh();
       setTimeout(() => setIsRefreshing(false), 1000);
     }
-  };
-
-  const getElapsedTime = () => {
-    if (callRecord.status === 'completed' || callRecord.status === 'failed') {
-      return callRecord.duration;
-    }
-    
-    const now = Date.now();
-    const start = new Date(callRecord.createdAt).getTime();
-    return Math.floor((now - start) / 1000);
   };
 
   const getAIProvider = () => {
@@ -196,7 +207,10 @@ export default function CallStatus({ callRecord, onComplete, onRefresh }: CallSt
               <span className="text-gray-500">Duração:</span>
               <p className="font-semibold text-gray-900">
                 <Clock className="inline w-4 h-4 mr-1" />
-                {formatTime(getElapsedTime())}
+                {formatTime(displayDuration)}
+                {(callRecord.status === 'completed' || callRecord.status === 'failed') && (
+                  <span className="text-xs text-gray-500 ml-1">(final)</span>
+                )}
               </p>
             </div>
           </div>
@@ -408,7 +422,8 @@ export default function CallStatus({ callRecord, onComplete, onRefresh }: CallSt
           {callRecord.completedAt && (
             <p><strong>Concluído:</strong> {new Date(callRecord.completedAt).toLocaleString()}</p>
           )}
-          <p><strong>Duração:</strong> {callRecord.duration} segundos</p>
+          <p><strong>Duração (DB):</strong> {callRecord.duration} segundos</p>
+          <p><strong>Duração (UI):</strong> {displayDuration} segundos</p>
           <p><strong>Provedor de IA:</strong> {getAIProvider()}</p>
           <p><strong>Provedor de Voz:</strong> {getVoiceProvider()}</p>
           {recentErrors.length > 0 && (

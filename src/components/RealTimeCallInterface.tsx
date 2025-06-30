@@ -52,6 +52,12 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
       console.log('No initial transcript found');
     }
 
+    // Set initial duration from database if call is completed
+    if (callRecord.status === 'completed' || callRecord.status === 'failed') {
+      console.log('Call already completed, using database duration:', callRecord.duration);
+      setCallDuration(callRecord.duration);
+    }
+
     // Set up real-time subscription for call updates
     console.log('Setting up real-time subscription for call:', callRecord.id);
     
@@ -59,12 +65,19 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
       console.log('Received real-time update:', {
         id: updatedCallRecord.id,
         status: updatedCallRecord.status,
-        transcriptLength: updatedCallRecord.result?.transcript?.length || 0
+        transcriptLength: updatedCallRecord.result?.transcript?.length || 0,
+        duration: updatedCallRecord.duration
       });
       
       setCallRecord(updatedCallRecord);
       setLastUpdate(new Date().toLocaleTimeString());
       setConnectionStatus('connected');
+      
+      // Update duration if call is completed
+      if ((updatedCallRecord.status === 'completed' || updatedCallRecord.status === 'failed') && updatedCallRecord.duration > 0) {
+        console.log('Call completed, setting final duration:', updatedCallRecord.duration);
+        setCallDuration(updatedCallRecord.duration);
+      }
       
       // Parse new transcript
       if (updatedCallRecord.result?.transcript) {
@@ -77,7 +90,9 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
       if (updatedCallRecord.status === 'completed' || updatedCallRecord.status === 'failed') {
         console.log('Call completed, status:', updatedCallRecord.status);
         if (intervalRef.current) {
+          console.log('Stopping duration timer');
           clearInterval(intervalRef.current);
+          intervalRef.current = undefined;
         }
         
         // Auto-close after showing final state for a few seconds
@@ -107,11 +122,22 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
                 transcriptChange: hasTranscriptChange,
                 durationChange: hasDurationChange,
                 newStatus: updatedRecord.status,
-                newTranscriptLength: updatedRecord.result?.transcript?.length || 0
+                newTranscriptLength: updatedRecord.result?.transcript?.length || 0,
+                newDuration: updatedRecord.duration
               });
               
               setCallRecord(updatedRecord);
               setLastUpdate(new Date().toLocaleTimeString());
+              
+              // Update duration if call is completed
+              if ((updatedRecord.status === 'completed' || updatedRecord.status === 'failed') && updatedRecord.duration > 0) {
+                console.log('Fallback refresh: Call completed, setting final duration:', updatedRecord.duration);
+                setCallDuration(updatedRecord.duration);
+                if (intervalRef.current) {
+                  clearInterval(intervalRef.current);
+                  intervalRef.current = undefined;
+                }
+              }
               
               if (updatedRecord.result?.transcript) {
                 parseTranscript(updatedRecord.result.transcript);
@@ -126,13 +152,18 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
       }
     }, 2000); // Check every 2 seconds for more responsive updates
 
-    // Start duration timer
-    const startTime = new Date(callRecord.createdAt).getTime();
-    intervalRef.current = window.setInterval(() => {
-      const now = Date.now();
-      const elapsed = Math.floor((now - startTime) / 1000);
-      setCallDuration(elapsed);
-    }, 1000);
+    // Start duration timer only for active calls
+    if (callRecord.status === 'in-progress' || callRecord.status === 'dialing') {
+      console.log('Starting duration timer for active call');
+      const startTime = new Date(callRecord.createdAt).getTime();
+      intervalRef.current = window.setInterval(() => {
+        const now = Date.now();
+        const elapsed = Math.floor((now - startTime) / 1000);
+        setCallDuration(elapsed);
+      }, 1000);
+    } else {
+      console.log('Call not active, not starting timer. Status:', callRecord.status);
+    }
 
     return () => {
       console.log('RealTimeCallInterface unmounting, cleaning up subscriptions');
@@ -270,9 +301,19 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
       console.log('Manual refresh triggered');
       const response = await getCallStatus(callRecord.id);
       if (response.success && response.data) {
-        console.log('Manual refresh successful:', response.data.status);
+        console.log('Manual refresh successful:', response.data.status, 'duration:', response.data.duration);
         setCallRecord(response.data);
         setLastUpdate(new Date().toLocaleTimeString());
+        
+        // Update duration if call is completed
+        if ((response.data.status === 'completed' || response.data.status === 'failed') && response.data.duration > 0) {
+          console.log('Manual refresh: Call completed, setting final duration:', response.data.duration);
+          setCallDuration(response.data.duration);
+          if (intervalRef.current) {
+            clearInterval(intervalRef.current);
+            intervalRef.current = undefined;
+          }
+        }
         
         if (response.data.result?.transcript) {
           parseTranscript(response.data.result.transcript);
@@ -348,6 +389,9 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
           <div className="flex items-center text-sm text-gray-500 mt-1">
             <Clock className="w-4 h-4 mr-1" />
             {formatTime(callDuration)}
+            {(callRecord.status === 'completed' || callRecord.status === 'failed') && (
+              <span className="ml-1 text-xs text-gray-400">(final)</span>
+            )}
           </div>
           <div className="flex items-center justify-between mt-1">
             {lastUpdate && (
@@ -519,7 +563,12 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-600">Duration:</span>
-                <span className="font-medium">{formatTime(callDuration)}</span>
+                <span className="font-medium">
+                  {formatTime(callDuration)}
+                  {(callRecord.status === 'completed' || callRecord.status === 'failed') && (
+                    <span className="text-xs text-gray-500 ml-1">(final)</span>
+                  )}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">Exchanges:</span>
@@ -555,6 +604,9 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
               {callRecord.completedAt && (
                 <div>Completed: {new Date(callRecord.completedAt).toLocaleString()}</div>
               )}
+              <div>DB Duration: {callRecord.duration}s</div>
+              <div>UI Duration: {callDuration}s</div>
+              <div>Timer Active: {intervalRef.current ? 'Yes' : 'No'}</div>
               <div>Transcript Length: {callRecord.result?.transcript?.length || 0} chars</div>
               <div>Conversation Turns: {conversationHistory.length}</div>
               <div>Waiting for Conversation: {isWaitingForConversation ? 'Yes' : 'No'}</div>

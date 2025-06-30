@@ -115,6 +115,8 @@ Deno.serve(async (req: Request) => {
       updateData.completed_at = new Date().toISOString();
       updateData.status = 'completed';
       
+      console.log('Call completed with duration:', duration, 'seconds');
+      
       const wasSuccessful = determineCallSuccess(
         currentCall.result_transcript, 
         duration, 
@@ -132,6 +134,8 @@ Deno.serve(async (req: Request) => {
       // Add hangup cause to details if available
       if (hangupCause) {
         updateData.result_details = `Call ended: ${hangupCause}. Duration: ${duration} seconds.`;
+      } else {
+        updateData.result_details = `Call completed successfully. Duration: ${duration} seconds.`;
       }
       
       if (!currentCall.result_transcript) {
@@ -146,6 +150,7 @@ Deno.serve(async (req: Request) => {
       updateData.result_success = false;
       updateData.completed_at = new Date().toISOString();
       updateData.status = 'failed';
+      updateData.duration = parseInt(callDuration) || 0; // Set duration even for failed calls
       
       // Provide specific error messages
       switch (callStatus) {
@@ -171,7 +176,7 @@ Deno.serve(async (req: Request) => {
           updateData.result_message = `Call ${callStatus}`;
       }
 
-      console.log('Marking call as failed:', { callId, callStatus, hangupCause });
+      console.log('Marking call as failed:', { callId, callStatus, hangupCause, duration: updateData.duration });
     }
 
     // Handle answered by machine/voicemail
@@ -201,7 +206,7 @@ Deno.serve(async (req: Request) => {
           headers: corsHeaders
         });
       } else {
-        console.log('Successfully updated call record:', callId);
+        console.log('Successfully updated call record:', callId, 'with duration:', updateData.duration);
       }
     } else {
       console.log('No changes detected, skipping database update');
