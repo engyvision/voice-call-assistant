@@ -7,7 +7,7 @@ import DebugPanel from './components/DebugPanel';
 import WebhookTester from './components/WebhookTester';
 import DiagnosticTool from './components/DiagnosticTool';
 import { CallRequest, CallRecord } from './types';
-import { initiateCall, getCallStatus } from './utils/realApi';
+import { initiateCall, getCallStatus } from './utils/telnyxApi';
 import { supabase } from './lib/supabase';
 
 type AppView = 'form' | 'status' | 'history' | 'debug' | 'webhooks' | 'diagnostics';
@@ -156,7 +156,7 @@ function App() {
               </div>
               <div>
                 <h1 className="text-xl font-bold text-gray-900">AI Call Assistant</h1>
-                <p className="text-sm text-gray-600">Professional AI-powered calling</p>
+                <p className="text-sm text-gray-600">Professional AI-powered calling with Telnyx</p>
               </div>
             </div>
 
@@ -240,8 +240,7 @@ function App() {
             </h1>
             <p className="text-xl text-gray-600 max-w-3xl mx-auto mb-8">
               Let our advanced AI handle your phone calls with natural conversation, 
-              professional tone, and reliable results. From appointments to inquiries, 
-              we've got you covered.
+              professional tone, and reliable results. Now powered by Telnyx for superior call quality.
             </p>
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mx-auto mb-12">
@@ -250,23 +249,23 @@ function App() {
                   <Phone className="w-6 h-6 text-blue-600" />
                 </div>
                 <h3 className="font-semibold text-gray-900 mb-2">Natural Conversations</h3>
-                <p className="text-gray-600 text-sm">AI that speaks naturally and handles complex conversations with ease</p>
+                <p className="text-gray-600 text-sm">AI that speaks naturally with AWS Polly voice synthesis</p>
               </div>
               
               <div className="bg-white rounded-xl p-6 shadow-lg">
                 <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center mb-4 mx-auto">
                   <Bot className="w-6 h-6 text-green-600" />
                 </div>
-                <h3 className="font-semibold text-gray-900 mb-2">24/7 Availability</h3>
-                <p className="text-gray-600 text-sm">Make calls anytime, anywhere. Your AI assistant never sleeps</p>
+                <h3 className="font-semibold text-gray-900 mb-2">Advanced AI</h3>
+                <p className="text-gray-600 text-sm">Powered by OpenAI GPT-4o with Distil-Whisper transcription</p>
               </div>
               
               <div className="bg-white rounded-xl p-6 shadow-lg">
                 <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mb-4 mx-auto">
                   <Sparkles className="w-6 h-6 text-purple-600" />
                 </div>
-                <h3 className="font-semibold text-gray-900 mb-2">Smart Results</h3>
-                <p className="text-gray-600 text-sm">Get detailed summaries and actionable outcomes from every call</p>
+                <h3 className="font-semibold text-gray-900 mb-2">Enterprise Quality</h3>
+                <p className="text-gray-600 text-sm">Telnyx infrastructure for reliable, high-quality calls</p>
               </div>
             </div>
           </div>
@@ -324,9 +323,10 @@ function App() {
               <span className="text-blue-600 font-semibold"> Ready for production use.</span>
             </p>
             <div className="flex justify-center items-center space-x-6 mt-4 text-sm text-gray-500">
-              <span>• Twilio Integration {connectionError ? '❌' : '✅'}</span>
+              <span>• Telnyx Integration {connectionError ? '❌' : '✅'}</span>
               <span>• Supabase Database {connectionError ? '❌' : '✅'}</span>
-              <span>• Real-time Call Tracking ✅</span>
+              <span>• OpenAI GPT-4o ✅</span>
+              <span>• AWS Polly Voice ✅</span>
               <span>• Production Ready ✅</span>
               {isDevelopment && <span>• Debug Mode 🔧</span>}
             </div>

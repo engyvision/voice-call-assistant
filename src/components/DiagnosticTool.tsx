@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Activity, AlertTriangle, CheckCircle, XCircle, Loader2, Eye, EyeOff } from 'lucide-react';
-import ElevenLabsFixGuide from './ElevenLabsFixGuide';
 
 interface DiagnosticResult {
   service: string;
@@ -14,7 +13,6 @@ export default function DiagnosticTool() {
   const [results, setResults] = useState<DiagnosticResult[]>([]);
   const [testing, setTesting] = useState(false);
   const [showApiKeys, setShowApiKeys] = useState(false);
-  const [showElevenLabsFix, setShowElevenLabsFix] = useState(false);
 
   const runDiagnostics = async () => {
     setTesting(true);
@@ -24,20 +22,14 @@ export default function DiagnosticTool() {
       testEnvironmentVariables,
       testSupabaseConnection,
       testOpenAIAPI,
-      testElevenLabsAPI,
-      testWebhookFunctions,
-      testTwilioConfiguration
+      testTelnyxConfiguration,
+      testWebhookFunctions
     ];
 
     for (const test of tests) {
       try {
         const result = await test();
         setResults(prev => [...prev, result]);
-        
-        // Show ElevenLabs fix guide if ElevenLabs test fails
-        if (result.service === 'ElevenLabs API' && result.status === 'error') {
-          setShowElevenLabsFix(true);
-        }
       } catch (error) {
         setResults(prev => [...prev, {
           service: 'Test Error',
@@ -55,12 +47,10 @@ export default function DiagnosticTool() {
     const requiredVars = [
       'VITE_SUPABASE_URL',
       'VITE_SUPABASE_ANON_KEY',
-      'VITE_TWILIO_ACCOUNT_SID',
-      'VITE_TWILIO_AUTH_TOKEN',
-      'VITE_TWILIO_PHONE_NUMBER',
-      'VITE_OPENAI_API_KEY',
-      'VITE_ELEVENLABS_API_KEY',
-      'VITE_ELEVENLABS_VOICE_ID'
+      'VITE_TELNYX_API_KEY',
+      'VITE_TELNYX_CONNECTION_ID',
+      'VITE_TELNYX_PHONE_NUMBER',
+      'VITE_OPENAI_API_KEY'
     ];
 
     const missing = requiredVars.filter(varName => !import.meta.env[varName]);
@@ -125,7 +115,7 @@ export default function DiagnosticTool() {
     if (!apiKey) {
       return {
         service: 'OpenAI API',
-        status: 'warning',
+        status: 'error',
         message: 'OpenAI API key not configured',
         fix: 'Add VITE_OPENAI_API_KEY to your environment variables'
       };
@@ -140,13 +130,13 @@ export default function DiagnosticTool() {
 
       if (response.ok) {
         const data = await response.json();
-        const hasGPT4 = data.data.some((model: any) => model.id.includes('gpt-4'));
+        const hasGPT4o = data.data.some((model: any) => model.id.includes('gpt-4o'));
         
         return {
           service: 'OpenAI API',
           status: 'success',
           message: 'OpenAI API connection successful',
-          details: `Found ${data.data.length} models, GPT-4 available: ${hasGPT4 ? 'Yes' : 'No'}`
+          details: `Found ${data.data.length} models, GPT-4o available: ${hasGPT4o ? 'Yes' : 'No'}`
         };
       } else if (response.status === 401) {
         return {
@@ -176,65 +166,70 @@ export default function DiagnosticTool() {
     }
   };
 
-  const testElevenLabsAPI = async (): Promise<DiagnosticResult> => {
-    const apiKey = import.meta.env.VITE_ELEVENLABS_API_KEY;
-    const voiceId = import.meta.env.VITE_ELEVENLABS_VOICE_ID;
-    
-    if (!apiKey) {
+  const testTelnyxConfiguration = async (): Promise<DiagnosticResult> => {
+    const apiKey = import.meta.env.VITE_TELNYX_API_KEY;
+    const connectionId = import.meta.env.VITE_TELNYX_CONNECTION_ID;
+    const phoneNumber = import.meta.env.VITE_TELNYX_PHONE_NUMBER;
+
+    if (!apiKey || !connectionId || !phoneNumber) {
       return {
-        service: 'ElevenLabs API',
-        status: 'warning',
-        message: 'ElevenLabs API key not configured',
-        fix: 'Add VITE_ELEVENLABS_API_KEY to your environment variables'
+        service: 'Telnyx Configuration',
+        status: 'error',
+        message: 'Telnyx credentials incomplete',
+        details: `Missing: ${[
+          !apiKey && 'API Key',
+          !connectionId && 'Connection ID', 
+          !phoneNumber && 'Phone Number'
+        ].filter(Boolean).join(', ')}`,
+        fix: 'Add missing Telnyx credentials to your environment variables'
       };
     }
 
     try {
-      const response = await fetch('https://api.elevenlabs.io/v1/voices', {
+      // Test Telnyx API access
+      const response = await fetch('https://api.telnyx.com/v2/phone_numbers', {
         headers: {
-          'Authorization': `Bearer ${apiKey}`
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
         }
       });
 
       if (response.ok) {
         const data = await response.json();
-        const voiceExists = voiceId ? data.voices.some((voice: any) => voice.voice_id === voiceId) : false;
-        const portugueseVoices = data.voices.filter((voice: any) => 
-          voice.labels?.language?.includes('Portuguese') || 
-          voice.labels?.language?.includes('pt')
-        );
+        const phoneNumbers = data.data || [];
+        const hasConfiguredNumber = phoneNumbers.some((num: any) => num.phone_number === phoneNumber);
         
         return {
-          service: 'ElevenLabs API',
-          status: voiceExists ? 'success' : 'warning',
-          message: 'ElevenLabs API connection successful',
-          details: `Found ${data.voices.length} voices, ${portugueseVoices.length} Portuguese voices. Configured voice ${voiceExists ? 'found' : 'NOT FOUND'}`,
-          fix: !voiceExists ? 'Update VITE_ELEVENLABS_VOICE_ID with a valid Portuguese voice ID' : undefined
+          service: 'Telnyx Configuration',
+          status: hasConfiguredNumber ? 'success' : 'warning',
+          message: 'Telnyx API connection successful',
+          details: `Found ${phoneNumbers.length} phone numbers. Configured number ${hasConfiguredNumber ? 'found' : 'NOT FOUND'}: ${phoneNumber}`,
+          fix: !hasConfiguredNumber ? 'Verify your phone number is correctly configured in Telnyx' : undefined
         };
       } else if (response.status === 401) {
         return {
-          service: 'ElevenLabs API',
+          service: 'Telnyx Configuration',
           status: 'error',
-          message: 'ElevenLabs API authentication failed',
-          details: 'Invalid API key',
-          fix: 'Check your ElevenLabs API key and ensure you have sufficient credits'
+          message: 'Telnyx authentication failed',
+          details: 'Invalid API Key',
+          fix: 'Verify your Telnyx API Key'
         };
       } else {
         return {
-          service: 'ElevenLabs API',
+          service: 'Telnyx Configuration',
           status: 'error',
-          message: `ElevenLabs API error: HTTP ${response.status}`,
+          message: `Telnyx API error: HTTP ${response.status}`,
           details: await response.text(),
-          fix: 'Check ElevenLabs service status and your API key permissions'
+          fix: 'Check Telnyx service status and your account permissions'
         };
       }
     } catch (error) {
       return {
-        service: 'ElevenLabs API',
+        service: 'Telnyx Configuration',
         status: 'error',
-        message: 'ElevenLabs API connection failed',
+        message: 'Telnyx API connection failed',
         details: error.message,
-        fix: 'Check your internet connection and ElevenLabs service status'
+        fix: 'Check your internet connection and Telnyx service status'
       };
     }
   };
@@ -244,10 +239,8 @@ export default function DiagnosticTool() {
     const testCallId = `diagnostic-${Date.now()}`;
     
     const webhooks = [
-      'twiml-voice',
-      'twiml-status',
-      'twiml-gather',
-      'twilio-initiate'
+      'telnyx-initiate',
+      'telnyx-webhook'
     ];
 
     const results = [];
@@ -280,7 +273,7 @@ export default function DiagnosticTool() {
       return {
         service: 'Webhook Functions',
         status: 'success',
-        message: 'All webhook functions are accessible',
+        message: 'All Telnyx webhook functions are accessible',
         details: `${accessibleCount}/${totalCount} functions responding`
       };
     } else {
@@ -291,69 +284,6 @@ export default function DiagnosticTool() {
         message: `${totalCount - accessibleCount} webhook functions not accessible`,
         details: `Not accessible: ${inaccessible.join(', ')}`,
         fix: 'Deploy missing Edge Functions to Supabase and ensure environment variables are set'
-      };
-    }
-  };
-
-  const testTwilioConfiguration = async (): Promise<DiagnosticResult> => {
-    const accountSid = import.meta.env.VITE_TWILIO_ACCOUNT_SID;
-    const authToken = import.meta.env.VITE_TWILIO_AUTH_TOKEN;
-    const phoneNumber = import.meta.env.VITE_TWILIO_PHONE_NUMBER;
-
-    if (!accountSid || !authToken || !phoneNumber) {
-      return {
-        service: 'Twilio Configuration',
-        status: 'error',
-        message: 'Twilio credentials incomplete',
-        details: `Missing: ${[
-          !accountSid && 'Account SID',
-          !authToken && 'Auth Token', 
-          !phoneNumber && 'Phone Number'
-        ].filter(Boolean).join(', ')}`,
-        fix: 'Add missing Twilio credentials to your environment variables'
-      };
-    }
-
-    try {
-      // Test Twilio API access
-      const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}.json`, {
-        headers: {
-          'Authorization': `Basic ${btoa(`${accountSid}:${authToken}`)}`
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        return {
-          service: 'Twilio Configuration',
-          status: 'success',
-          message: 'Twilio API connection successful',
-          details: `Account: ${data.friendly_name}, Status: ${data.status}`
-        };
-      } else if (response.status === 401) {
-        return {
-          service: 'Twilio Configuration',
-          status: 'error',
-          message: 'Twilio authentication failed',
-          details: 'Invalid Account SID or Auth Token',
-          fix: 'Verify your Twilio Account SID and Auth Token'
-        };
-      } else {
-        return {
-          service: 'Twilio Configuration',
-          status: 'error',
-          message: `Twilio API error: HTTP ${response.status}`,
-          details: await response.text(),
-          fix: 'Check Twilio service status and your account permissions'
-        };
-      }
-    } catch (error) {
-      return {
-        service: 'Twilio Configuration',
-        status: 'error',
-        message: 'Twilio API connection failed',
-        details: error.message,
-        fix: 'Check your internet connection and Twilio service status'
       };
     }
   };
@@ -429,20 +359,15 @@ export default function DiagnosticTool() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm font-mono">
             <div>VITE_SUPABASE_URL: {maskApiKey(import.meta.env.VITE_SUPABASE_URL)}</div>
             <div>VITE_SUPABASE_ANON_KEY: {maskApiKey(import.meta.env.VITE_SUPABASE_ANON_KEY)}</div>
-            <div>VITE_TWILIO_ACCOUNT_SID: {maskApiKey(import.meta.env.VITE_TWILIO_ACCOUNT_SID)}</div>
-            <div>VITE_TWILIO_AUTH_TOKEN: {maskApiKey(import.meta.env.VITE_TWILIO_AUTH_TOKEN)}</div>
-            <div>VITE_TWILIO_PHONE_NUMBER: {import.meta.env.VITE_TWILIO_PHONE_NUMBER || 'Not set'}</div>
+            <div>VITE_TELNYX_API_KEY: {maskApiKey(import.meta.env.VITE_TELNYX_API_KEY)}</div>
+            <div>VITE_TELNYX_CONNECTION_ID: {import.meta.env.VITE_TELNYX_CONNECTION_ID || 'Not set'}</div>
+            <div>VITE_TELNYX_PHONE_NUMBER: {import.meta.env.VITE_TELNYX_PHONE_NUMBER || 'Not set'}</div>
             <div>VITE_OPENAI_API_KEY: {maskApiKey(import.meta.env.VITE_OPENAI_API_KEY)}</div>
-            <div>VITE_ELEVENLABS_API_KEY: {maskApiKey(import.meta.env.VITE_ELEVENLABS_API_KEY)}</div>
-            <div>VITE_ELEVENLABS_VOICE_ID: {import.meta.env.VITE_ELEVENLABS_VOICE_ID || 'Not set'}</div>
+            <div>VITE_AI_MODEL: {import.meta.env.VITE_AI_MODEL || 'gpt-4o'}</div>
+            <div>VITE_TTS_ENGINE: {import.meta.env.VITE_TTS_ENGINE || 'aws.polly'}</div>
+            <div>VITE_TTS_VOICE: {import.meta.env.VITE_TTS_VOICE || 'Joanna-Neural'}</div>
+            <div>VITE_TRANSCRIPTION_MODEL: {import.meta.env.VITE_TRANSCRIPTION_MODEL || 'distil-whisper/distil-large-v2'}</div>
           </div>
-        </div>
-      )}
-
-      {/* ElevenLabs Fix Guide */}
-      {showElevenLabsFix && (
-        <div className="mb-6">
-          <ElevenLabsFixGuide />
         </div>
       )}
 
@@ -486,8 +411,8 @@ export default function DiagnosticTool() {
           <p>• <strong>If all tests pass:</strong> Your system should be working. Try making a test call.</p>
           <p>• <strong>If API tests fail:</strong> Check your API keys and service status pages.</p>
           <p>• <strong>If webhook tests fail:</strong> Ensure Edge Functions are deployed with environment variables.</p>
-          <p>• <strong>If Twilio tests fail:</strong> Verify your Twilio credentials and account status.</p>
-          <p>• <strong>If ElevenLabs fails with "Failed to fetch":</strong> This is normal from browser. Check Edge Function environment variables.</p>
+          <p>• <strong>If Telnyx tests fail:</strong> Verify your Telnyx credentials and account status.</p>
+          <p>• <strong>New Configuration:</strong> Using Telnyx + OpenAI GPT-4o + AWS Polly + Distil-Whisper</p>
         </div>
       </div>
     </div>
