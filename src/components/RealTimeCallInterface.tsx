@@ -34,33 +34,48 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
   const [lastUpdate, setLastUpdate] = useState<string>('');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+  const [isWaitingForConversation, setIsWaitingForConversation] = useState(true);
   
   const conversationRef = useRef<HTMLDivElement>(null);
   const intervalRef = useRef<number>();
   const subscriptionRef = useRef<any>();
 
   useEffect(() => {
+    console.log('RealTimeCallInterface mounted with call:', callRecord.id, 'status:', callRecord.status);
+    
     // Parse initial transcript if available
     if (callRecord.result?.transcript) {
+      console.log('Initial transcript found:', callRecord.result.transcript.length, 'characters');
       parseTranscript(callRecord.result.transcript);
+      setIsWaitingForConversation(false);
+    } else {
+      console.log('No initial transcript found');
     }
 
     // Set up real-time subscription for call updates
     console.log('Setting up real-time subscription for call:', callRecord.id);
     
     subscriptionRef.current = subscribeToCallUpdates(callRecord.id, (updatedCallRecord) => {
-      console.log('Received real-time update:', updatedCallRecord);
+      console.log('Received real-time update:', {
+        id: updatedCallRecord.id,
+        status: updatedCallRecord.status,
+        transcriptLength: updatedCallRecord.result?.transcript?.length || 0
+      });
+      
       setCallRecord(updatedCallRecord);
       setLastUpdate(new Date().toLocaleTimeString());
       setConnectionStatus('connected');
       
       // Parse new transcript
       if (updatedCallRecord.result?.transcript) {
+        console.log('Parsing updated transcript:', updatedCallRecord.result.transcript.length, 'characters');
         parseTranscript(updatedCallRecord.result.transcript);
+        setIsWaitingForConversation(false);
       }
 
       // Check if call completed
       if (updatedCallRecord.status === 'completed' || updatedCallRecord.status === 'failed') {
+        console.log('Call completed, status:', updatedCallRecord.status);
         if (intervalRef.current) {
           clearInterval(intervalRef.current);
         }
@@ -72,21 +87,35 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
       }
     });
 
-    // Set up periodic refresh as fallback
+    // Set up aggressive periodic refresh as fallback
     const refreshInterval = setInterval(async () => {
       if (callRecord.status === 'in-progress' || callRecord.status === 'dialing') {
         try {
+          console.log('Fallback refresh checking for updates...');
           const response = await getCallStatus(callRecord.id);
           if (response.success && response.data) {
             const updatedRecord = response.data;
-            if (updatedRecord.status !== callRecord.status || 
-                updatedRecord.result?.transcript !== callRecord.result?.transcript) {
-              console.log('Fallback refresh detected changes:', updatedRecord);
+            
+            // Check for any changes
+            const hasStatusChange = updatedRecord.status !== callRecord.status;
+            const hasTranscriptChange = updatedRecord.result?.transcript !== callRecord.result?.transcript;
+            const hasDurationChange = updatedRecord.duration !== callRecord.duration;
+            
+            if (hasStatusChange || hasTranscriptChange || hasDurationChange) {
+              console.log('Fallback refresh detected changes:', {
+                statusChange: hasStatusChange,
+                transcriptChange: hasTranscriptChange,
+                durationChange: hasDurationChange,
+                newStatus: updatedRecord.status,
+                newTranscriptLength: updatedRecord.result?.transcript?.length || 0
+              });
+              
               setCallRecord(updatedRecord);
               setLastUpdate(new Date().toLocaleTimeString());
               
               if (updatedRecord.result?.transcript) {
                 parseTranscript(updatedRecord.result.transcript);
+                setIsWaitingForConversation(false);
               }
             }
           }
@@ -95,7 +124,7 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
           setConnectionStatus('disconnected');
         }
       }
-    }, 3000); // Check every 3 seconds
+    }, 2000); // Check every 2 seconds for more responsive updates
 
     // Start duration timer
     const startTime = new Date(callRecord.createdAt).getTime();
@@ -106,6 +135,7 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
     }, 1000);
 
     return () => {
+      console.log('RealTimeCallInterface unmounting, cleaning up subscriptions');
       if (subscriptionRef.current) {
         subscriptionRef.current.unsubscribe();
       }
@@ -124,6 +154,8 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
   }, [conversationHistory]);
 
   const parseTranscript = (transcript: string) => {
+    console.log('Parsing transcript:', transcript.substring(0, 200) + '...');
+    
     const lines = transcript.split('\n').filter(line => line.trim());
     const history: ConversationTurn[] = [];
     
@@ -149,6 +181,7 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
       }
     }
     
+    console.log('Parsed conversation history:', history.length, 'turns');
     setConversationHistory(history);
   };
 
@@ -234,13 +267,16 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
     try {
+      console.log('Manual refresh triggered');
       const response = await getCallStatus(callRecord.id);
       if (response.success && response.data) {
+        console.log('Manual refresh successful:', response.data.status);
         setCallRecord(response.data);
         setLastUpdate(new Date().toLocaleTimeString());
         
         if (response.data.result?.transcript) {
           parseTranscript(response.data.result.transcript);
+          setIsWaitingForConversation(false);
         }
       }
     } catch (error) {
@@ -348,11 +384,25 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
               )}
             </h3>
             
-            {conversationHistory.length === 0 ? (
+            {isWaitingForConversation ? (
               <div className="text-center text-gray-500 py-8">
-                <Phone className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                <Phone className="w-8 h-8 mx-auto mb-2 opacity-50 animate-pulse" />
                 <p>Waiting for conversation to begin...</p>
                 <p className="text-sm mt-2">Call status: {callRecord.status}</p>
+                <p className="text-xs mt-1 text-gray-400">
+                  Connection: {connectionStatus} • Last update: {lastUpdate || 'Never'}
+                </p>
+                {callRecord.status === 'in-progress' && (
+                  <div className="mt-4">
+                    <button
+                      onClick={handleManualRefresh}
+                      disabled={isRefreshing}
+                      className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {isRefreshing ? 'Checking...' : 'Check for Updates'}
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="space-y-4">
@@ -506,6 +556,8 @@ export default function RealTimeCallInterface({ callRecord: initialCallRecord, o
                 <div>Completed: {new Date(callRecord.completedAt).toLocaleString()}</div>
               )}
               <div>Transcript Length: {callRecord.result?.transcript?.length || 0} chars</div>
+              <div>Conversation Turns: {conversationHistory.length}</div>
+              <div>Waiting for Conversation: {isWaitingForConversation ? 'Yes' : 'No'}</div>
             </div>
           </div>
         </div>

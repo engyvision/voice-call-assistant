@@ -45,7 +45,15 @@ export function subscribeToCallUpdates(callId: string, callback: (callRecord: Ca
         filter: `id=eq.${callId}`
       },
       async (payload) => {
-        console.log('Real-time call update received:', payload);
+        console.log('Real-time call update received:', {
+          event: payload.eventType,
+          table: payload.table,
+          new: payload.new ? {
+            id: payload.new.id,
+            status: payload.new.status,
+            transcriptLength: payload.new.result_transcript?.length || 0
+          } : null
+        });
         
         try {
           // Transform the updated record
@@ -71,7 +79,8 @@ export function subscribeToCallUpdates(callId: string, callback: (callRecord: Ca
           console.log('Transformed call record for real-time update:', {
             id: callRecord.id,
             status: callRecord.status,
-            transcriptLength: callRecord.result?.transcript?.length || 0
+            transcriptLength: callRecord.result?.transcript?.length || 0,
+            hasResult: !!callRecord.result
           });
           
           callback(callRecord);
@@ -81,7 +90,7 @@ export function subscribeToCallUpdates(callId: string, callback: (callRecord: Ca
       }
     )
     .on('system', {}, (status) => {
-      console.log('Real-time subscription status:', status);
+      console.log('Real-time subscription system status:', status);
     })
     .subscribe((status) => {
       console.log('Subscription status changed:', status);
@@ -89,6 +98,10 @@ export function subscribeToCallUpdates(callId: string, callback: (callRecord: Ca
         console.log('Successfully subscribed to real-time updates for call:', callId);
       } else if (status === 'CHANNEL_ERROR') {
         console.error('Real-time subscription error for call:', callId);
+      } else if (status === 'TIMED_OUT') {
+        console.warn('Real-time subscription timed out for call:', callId);
+      } else if (status === 'CLOSED') {
+        console.log('Real-time subscription closed for call:', callId);
       }
     });
 
@@ -224,6 +237,8 @@ export async function getCallStatus(callId: string): Promise<ApiResponse<CallRec
       return { success: false, error: 'Database connection unavailable' };
     }
 
+    console.log('Fetching call status for:', callId);
+
     const { data, error } = await supabase
       .from('call_records')
       .select('*')
@@ -238,6 +253,13 @@ export async function getCallStatus(callId: string): Promise<ApiResponse<CallRec
     if (!data) {
       return { success: false, error: 'Call not found' };
     }
+
+    console.log('Retrieved call status:', {
+      id: data.id,
+      status: data.status,
+      transcriptLength: data.result_transcript?.length || 0,
+      duration: data.duration
+    });
 
     // Check if call has been in dialing state too long and mark as failed
     if (data.status === 'dialing' || data.status === 'preparing') {

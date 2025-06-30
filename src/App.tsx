@@ -43,20 +43,27 @@ function App() {
     setIsLoading(true);
     
     try {
+      console.log('Initiating call with request:', request);
+      
       // Initiate the call
       const response = await initiateCall(request);
       
       if (response.success && response.data) {
+        console.log('Call initiated successfully, getting initial status...');
+        
         // Get initial call record
         const statusResponse = await getCallStatus(response.data);
         
         if (statusResponse.success && statusResponse.data) {
+          console.log('Got initial call status:', statusResponse.data.status);
           setCurrentCall(statusResponse.data);
           setCurrentView('status');
         } else {
+          console.error('Failed to get call status:', statusResponse.error);
           alert(statusResponse.error || 'Failed to get call status');
         }
       } else {
+        console.error('Failed to initiate call:', response.error);
         // Show error to user
         alert(response.error || 'Failed to initiate call');
       }
@@ -69,12 +76,14 @@ function App() {
   };
 
   const handleCallComplete = () => {
+    console.log('Call completed, returning to form view');
     setCurrentCall(null);
     setCurrentView('form');
     setCallHistoryRefresh(prev => prev + 1);
   };
 
   const handleViewChange = (view: AppView) => {
+    console.log('Changing view to:', view);
     setCurrentView(view);
     if (view === 'form') {
       setCurrentCall(null);
@@ -84,8 +93,10 @@ function App() {
   const refreshCallStatus = async () => {
     if (currentCall && currentCall.status !== 'completed' && currentCall.status !== 'failed') {
       try {
+        console.log('Refreshing call status for:', currentCall.id);
         const response = await getCallStatus(currentCall.id);
         if (response.success && response.data) {
+          console.log('Refreshed call status:', response.data.status);
           setCurrentCall(response.data);
         }
       } catch (error) {
