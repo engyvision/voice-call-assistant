@@ -50,19 +50,6 @@ Deno.serve(async (req: Request) => {
         headers: corsHeaders
       });
     }
-    
-    // Check if this looks like a Twilio request
-    const userAgent = req.headers.get('user-agent') || '';
-    const isTwilioRequest = userAgent.includes('TwilioProxy') || userAgent.includes('Twilio');
-    const hasTwilioSignature = req.headers.get('x-twilio-signature');
-    
-    console.log('Request analysis:', { isTwilioRequest, hasTwilioSignature: !!hasTwilioSignature });
-
-    // Accept requests from Twilio (with signature) or allow all for now to debug
-    if (!isTwilioRequest && !hasTwilioSignature) {
-      console.log('Non-Twilio request without signature - allowing for debugging');
-      // For debugging, we'll allow these requests but log them
-    }
 
     // Get Twilio webhook data
     let formData;
@@ -88,25 +75,54 @@ Deno.serve(async (req: Request) => {
     const callStatus = formData.get('CallStatus') as string;
     const callDuration = formData.get('CallDuration') as string;
     const answeredBy = formData.get('AnsweredBy') as string;
+    const hangupCause = formData.get('HangupCause') as string;
 
-    console.log('Call status update:', { callId, callSid, callStatus, callDuration, answeredBy });
+    console.log('Call status update received:', { 
+      callId, 
+      callSid, 
+      callStatus, 
+      callDuration, 
+      answeredBy, 
+      hangupCause 
+    });
+
+    // Get current call record to check existing status
+    const { data: currentCall, error: fetchError } = await supabase
+      .from('call_records')
+      .select('*')
+      .eq('id', callId)
+      .single();
+
+    if (fetchError || !currentCall) {
+      console.error('Call record not found:', fetchError);
+      return new Response('Call record not found', {
+        status: 404,
+        headers: corsHeaders
+      });
+    }
+
+    console.log('Current call status:', currentCall.status);
 
     // Update call record based on status
-    let updateData: any = { status: mapTwilioStatus(callStatus) };
+    let updateData: any = { 
+      status: mapTwilioStatus(callStatus),
+      // Always update the last status callback time
+      updated_at: new Date().toISOString()
+    };
     
+    // Handle call completion
     if (callStatus === 'completed') {
       const duration = parseInt(callDuration) || 0;
       updateData.duration = duration;
       updateData.completed_at = new Date().toISOString();
+      updateData.status = 'completed';
       
-      // Get current call record to check transcript
-      const { data: callRecord } = await supabase
-        .from('call_records')
-        .select('result_transcript, call_goal')
-        .eq('id', callId)
-        .single();
-      
-      const wasSuccessful = determineCallSuccess(callRecord?.result_transcript, duration, callRecord?.call_goal);
+      const wasSuccessful = determineCallSuccess(
+        currentCall.result_transcript, 
+        duration, 
+        currentCall.call_goal,
+        hangupCause
+      );
       
       updateData.result_success = wasSuccessful;
       updateData.result_message = wasSuccessful 
@@ -115,14 +131,23 @@ Deno.serve(async (req: Request) => {
           ? 'Call was too short to complete objective'
           : 'Call completed but objective may not have been achieved';
       
-      if (!callRecord?.result_transcript) {
+      // Add hangup cause to details if available
+      if (hangupCause) {
+        updateData.result_details = `Call ended: ${hangupCause}. Duration: ${duration} seconds.`;
+      }
+      
+      if (!currentCall.result_transcript) {
         updateData.result_transcript = `Call completed with duration: ${duration} seconds`;
       }
+
+      console.log('Marking call as completed:', { callId, duration, wasSuccessful });
     }
     
-    if (callStatus === 'failed' || callStatus === 'busy' || callStatus === 'no-answer') {
+    // Handle call failures
+    if (['failed', 'busy', 'no-answer', 'canceled'].includes(callStatus)) {
       updateData.result_success = false;
       updateData.completed_at = new Date().toISOString();
+      updateData.status = 'failed';
       
       // Provide specific error messages
       switch (callStatus) {
@@ -134,20 +159,30 @@ Deno.serve(async (req: Request) => {
           updateData.result_message = 'No answer received';
           updateData.result_details = 'The call was not answered. You may want to try calling at a different time.';
           break;
+        case 'canceled':
+          updateData.result_message = 'Call was canceled';
+          updateData.result_details = 'The call was canceled before completion.';
+          break;
         case 'failed':
           updateData.result_message = 'Call failed to connect';
-          updateData.result_details = 'The call could not be completed due to a technical issue or invalid number.';
+          updateData.result_details = hangupCause 
+            ? `Call failed: ${hangupCause}` 
+            : 'The call could not be completed due to a technical issue or invalid number.';
           break;
         default:
           updateData.result_message = `Call ${callStatus}`;
       }
+
+      console.log('Marking call as failed:', { callId, callStatus, hangupCause });
     }
 
     // Handle answered by machine/voicemail
     if (answeredBy === 'machine_start' || answeredBy === 'machine_end_beep') {
-      updateData.result_details = 'Call was answered by voicemail/answering machine';
+      updateData.result_details = (updateData.result_details || '') + 
+        ' Call was answered by voicemail/answering machine.';
     }
 
+    // Perform the database update
     const { error: updateError } = await supabase
       .from('call_records')
       .update(updateData)
@@ -155,6 +190,10 @@ Deno.serve(async (req: Request) => {
 
     if (updateError) {
       console.error('Failed to update call record:', updateError);
+      return new Response('Database update failed', {
+        status: 500,
+        headers: corsHeaders
+      });
     } else {
       console.log('Successfully updated call record:', callId, updateData);
     }
@@ -188,13 +227,24 @@ function mapTwilioStatus(twilioStatus: string): string {
     case 'canceled':
       return 'failed';
     default:
+      console.log('Unknown Twilio status:', twilioStatus);
       return 'preparing';
   }
 }
 
-function determineCallSuccess(transcript: string, duration: number, callGoal: string): boolean {
+function determineCallSuccess(
+  transcript: string, 
+  duration: number, 
+  callGoal: string, 
+  hangupCause?: string
+): boolean {
   // If call was very short, likely unsuccessful
   if (duration < 15) return false;
+  
+  // If hangup cause indicates failure
+  if (hangupCause && ['busy', 'no-answer', 'failed'].includes(hangupCause)) {
+    return false;
+  }
   
   // If no transcript, base success on duration and call goal
   if (!transcript) {
@@ -207,8 +257,15 @@ function determineCallSuccess(transcript: string, duration: number, callGoal: st
   
   // Analyze transcript for success indicators
   const lowerTranscript = transcript.toLowerCase();
-  const successKeywords = ['yes', 'sure', 'available', 'appointment', 'booked', 'scheduled', 'confirmed', 'reserved', 'okay', 'sounds good'];
-  const failureKeywords = ['no', 'busy', 'unavailable', 'closed', 'sorry', 'can\'t', 'unable'];
+  const successKeywords = [
+    'yes', 'sure', 'available', 'appointment', 'booked', 'scheduled', 
+    'confirmed', 'reserved', 'okay', 'sounds good', 'perfect', 'great',
+    'sim', 'claro', 'disponível', 'agendado', 'confirmado', 'reservado'
+  ];
+  const failureKeywords = [
+    'no', 'busy', 'unavailable', 'closed', 'sorry', 'can\'t', 'unable',
+    'não', 'ocupado', 'indisponível', 'fechado', 'desculpe'
+  ];
   
   const hasSuccess = successKeywords.some(keyword => lowerTranscript.includes(keyword));
   const hasFailure = failureKeywords.some(keyword => lowerTranscript.includes(keyword));

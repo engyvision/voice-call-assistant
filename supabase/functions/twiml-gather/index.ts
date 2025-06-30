@@ -106,6 +106,26 @@ Deno.serve(async (req: Request) => {
     // Process speech with AI to generate intelligent response
     const aiResponse = await processWithAI(speechResult, callRecord, conversationHistory);
     
+    // Check if this should end the call
+    if (!aiResponse.shouldContinue) {
+      console.log('AI determined call should end, generating hangup TwiML');
+      
+      // Update call status to completed before hanging up
+      await supabase
+        .from('call_records')
+        .update({ 
+          status: 'completed',
+          completed_at: new Date().toISOString(),
+          result_success: true,
+          result_message: 'Call completed successfully by AI decision'
+        })
+        .eq('id', callId);
+      
+      return new Response(generateHangupTwiML(aiResponse.text), {
+        headers: { 'Content-Type': 'text/xml', ...corsHeaders }
+      });
+    }
+    
     // Generate appropriate TwiML response based on AI decision
     const twiml = generateResponseTwiML(aiResponse, callId);
 
@@ -160,7 +180,7 @@ async function processWithAI(
 
     return {
       text: aiResponse,
-      shouldContinue: !shouldEndCall(aiResponse)
+      shouldContinue: !shouldEndCall(aiResponse) && !shouldEndCall(userSpeech)
     };
 
   } catch (error) {
@@ -187,22 +207,31 @@ INSTRUÇÕES IMPORTANTES:
 5. Faça perguntas claras quando precisar de informações
 6. Confirme informações importantes
 7. Agradeça sempre pela atenção
+8. TERMINE A LIGAÇÃO quando o objetivo for alcançado ou quando a pessoa indicar que quer encerrar
 
 REGRAS DE CONVERSA:
 - Se não entender algo, peça para repetir educadamente
 - Se a pessoa estiver ocupada, ofereça para ligar em outro momento
-- Se conseguir o objetivo, confirme os detalhes e agradeça
-- Se não conseguir, agradeça e termine educadamente
+- Se conseguir o objetivo, confirme os detalhes, agradeça e TERMINE a ligação
+- Se não conseguir, agradeça e TERMINE educadamente
 - Responda de forma natural e conversacional
 - Adapte-se ao tom e estilo da pessoa
+- Se a pessoa disser "tchau", "obrigado", "até logo" ou similar, TERMINE a ligação
+
+SINAIS PARA TERMINAR A LIGAÇÃO:
+- Objetivo da ligação foi alcançado
+- Pessoa quer encerrar (diz tchau, obrigado, etc.)
+- Pessoa está claramente ocupada ou irritada
+- Conversa chegou a uma conclusão natural
 
 FORMATO DE RESPOSTA:
 - Responda apenas com o texto que deve ser falado
 - Não inclua ações ou descrições entre parênteses
 - Mantenha tom conversacional e natural
 - Use linguagem apropriada para o contexto
+- Se for terminar, use frases de despedida como "Obrigado pelo seu tempo, tenha um ótimo dia!"
 
-Lembre-se: Você está representando seu cliente, seja profissional e eficiente.`;
+Lembre-se: Você está representando seu cliente, seja profissional e eficiente. TERMINE a ligação quando apropriado.`;
 }
 
 function formatConversationHistory(history: ConversationTurn[]): string {
@@ -229,7 +258,7 @@ async function callOpenAI(
         { role: 'system', content: systemPrompt },
         { 
           role: 'user', 
-          content: `Histórico da conversa:\n${conversationHistory}\n\nÚltima fala da pessoa: "${userInput}"\n\nResponda naturalmente em português como um assistente profissional:` 
+          content: `Histórico da conversa:\n${conversationHistory}\n\nÚltima fala da pessoa: "${userInput}"\n\nResponda naturalmente em português como um assistente profissional. Se for apropriado terminar a ligação, inclua uma despedida educada:` 
         }
       ],
       temperature: 0.7,
@@ -267,7 +296,7 @@ async function callClaude(
       messages: [
         {
           role: 'user',
-          content: `Histórico da conversa:\n${conversationHistory}\n\nÚltima fala da pessoa: "${userInput}"\n\nResponda naturalmente em português como um assistente profissional:`
+          content: `Histórico da conversa:\n${conversationHistory}\n\nÚltima fala da pessoa: "${userInput}"\n\nResponda naturalmente em português como um assistente profissional. Se for apropriado terminar a ligação, inclua uma despedida educada:`
         }
       ]
     })
@@ -285,6 +314,11 @@ function generateRuleBasedResponse(userSpeech: string, callRecord: any): string 
   const { call_goal, recipient_name } = callRecord;
   const lowerSpeech = userSpeech.toLowerCase();
   
+  // Check for end-of-call indicators
+  if (shouldEndCall(userSpeech)) {
+    return "Obrigado pelo seu tempo. Tenha um ótimo dia!";
+  }
+  
   // Basic rule-based responses for common scenarios
   if (lowerSpeech.includes('sim') || lowerSpeech.includes('pode') || lowerSpeech.includes('claro')) {
     if (call_goal.includes('appointment') || call_goal.includes('consulta')) {
@@ -297,7 +331,7 @@ function generateRuleBasedResponse(userSpeech: string, callRecord: any): string 
   }
   
   if (lowerSpeech.includes('não') || lowerSpeech.includes('ocupado') || lowerSpeech.includes('agora não')) {
-    return "Entendo que vocês estão ocupados. Quando seria um melhor momento para ligar de volta?";
+    return "Entendo que vocês estão ocupados. Quando seria um melhor momento para ligar de volta? Obrigado pelo seu tempo.";
   }
   
   if (lowerSpeech.includes('quem') || lowerSpeech.includes('empresa')) {
@@ -312,6 +346,9 @@ function generateRuleBasedResponse(userSpeech: string, callRecord: any): string 
 }
 
 function generateFallbackResponse(userSpeech: string, callRecord: any): string {
+  if (shouldEndCall(userSpeech)) {
+    return "Obrigado pelo seu tempo. Tenha um ótimo dia!";
+  }
   return "Desculpe, tive um problema técnico. Pode repetir o que disse, por favor?";
 }
 
@@ -354,12 +391,16 @@ function generateResponseTwiML(aiResponse: { text: string; shouldContinue: boole
   <Hangup/>
 </Response>`;
   } else {
-    return `<?xml version="1.0" encoding="UTF-8"?>
+    return generateHangupTwiML(aiResponse.text);
+  }
+}
+
+function generateHangupTwiML(finalMessage: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="alice" language="pt-BR">${aiResponse.text}</Say>
+  <Say voice="alice" language="pt-BR">${finalMessage}</Say>
   <Hangup/>
 </Response>`;
-  }
 }
 
 function generateTestTwiML(): string {
@@ -397,12 +438,22 @@ async function updateCallProgress(
     `${turn.speaker === 'ai' ? 'Assistente' : 'Pessoa'}: ${turn.text}`
   ).join('\n');
 
+  const updateData: any = {
+    result_transcript: transcript,
+    status: 'in-progress'
+  };
+
+  // If AI decided to end the call, mark as completed
+  if (!aiResponse.shouldContinue) {
+    updateData.status = 'completed';
+    updateData.completed_at = new Date().toISOString();
+    updateData.result_success = true;
+    updateData.result_message = 'Call completed successfully';
+  }
+
   await supabase
     .from('call_records')
-    .update({ 
-      result_transcript: transcript,
-      status: 'in-progress'
-    })
+    .update(updateData)
     .eq('id', callId);
 }
 
@@ -417,7 +468,12 @@ function shouldEndCall(text: string): boolean {
     'encerrar',
     'finalizar',
     'até mais',
-    'desligar'
+    'desligar',
+    'bye',
+    'goodbye',
+    'thank you',
+    'thanks',
+    'have a good day'
   ];
   
   const lowerText = text.toLowerCase();

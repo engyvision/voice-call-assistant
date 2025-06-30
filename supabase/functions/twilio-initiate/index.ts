@@ -123,8 +123,8 @@ Deno.serve(async (req: Request) => {
     // Use the call ID as a parameter to identify the call in webhooks
     formData.append('Url', `${supabaseUrl}/functions/v1/twiml-voice?callId=${callId}`);
     formData.append('StatusCallback', `${supabaseUrl}/functions/v1/twiml-status?callId=${callId}`);
-    // Fix the status callback events - use only valid events
-    formData.append('StatusCallbackEvent', 'answered,completed');
+    // Enhanced status callback events to catch all call state changes
+    formData.append('StatusCallbackEvent', 'initiated,ringing,answered,completed');
     formData.append('StatusCallbackMethod', 'POST');
     formData.append('Timeout', '30'); // 30 second timeout for ringing
     formData.append('Record', 'false'); // Don't record calls for privacy
@@ -213,6 +213,7 @@ Original error: ${message}`;
     }
 
     // Set up a server-side timeout to mark call as failed if no status updates come
+    // Reduced timeout since we now have better status callback handling
     setTimeout(async () => {
       try {
         const { data: currentCall } = await supabase
@@ -221,7 +222,7 @@ Original error: ${message}`;
           .eq('id', callId)
           .single();
         
-        // If call is still in dialing state after 90 seconds, mark as failed
+        // If call is still in dialing state after 2 minutes, mark as failed
         if (currentCall && currentCall.status === 'dialing') {
           console.log('Server-side call timeout - marking as failed:', callId);
           await supabase
@@ -238,7 +239,7 @@ Original error: ${message}`;
       } catch (error) {
         console.error('Error in server-side timeout handler:', error);
       }
-    }, 90000); // 90 seconds timeout
+    }, 120000); // 2 minutes timeout
 
     return new Response(JSON.stringify({ 
       success: true, 
