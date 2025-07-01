@@ -79,14 +79,24 @@ Deno.serve(async (req: Request) => {
     const telnyxUrl = 'https://api.telnyx.com/v2/calls';
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     
-    // Simple call payload - Telnyx doesn't support ai_config
+    // Enhanced call payload with machine detection and proper webhook configuration
     const callPayload = {
       connection_id: TELNYX_CONNECTION_ID,
       to: phoneNumber,
       from: TELNYX_PHONE_NUMBER,
       webhook_url: `${supabaseUrl}/functions/v1/telnyx-webhook?callId=${callId}`,
       webhook_url_method: 'POST',
-      timeout_secs: 30
+      timeout_secs: 30,
+      // Enable machine detection to avoid talking to voicemail
+      answering_machine_detection: 'premium',
+      answering_machine_detection_config: {
+        total_analysis_time_millis: 4000,
+        after_greeting_silence_millis: 800,
+        greeting_duration_millis: 3000,
+        initial_silence_millis: 3500,
+        maximum_number_of_words: 6,
+        silence_threshold: 256
+      }
     };
 
     console.log('Telnyx call payload:', callPayload);
@@ -151,8 +161,7 @@ Deno.serve(async (req: Request) => {
     const { error: updateError } = await supabase
       .from('call_records')
       .update({ 
-        telnyx_call_id: telnyxCallId,
-        status: 'initiated' 
+        status: 'dialing'
       })
       .eq('id', callId);
 
