@@ -23,7 +23,10 @@ async function telnyxApiCall(endpoint: string, method: string, body?: any) {
     throw new Error('TELNYX_API_KEY not configured');
   }
   
-  console.log(`Making Telnyx API call: ${method} ${endpoint}`, body ? JSON.stringify(body, null, 2) : 'no body');
+  console.log(`🔗 Making Telnyx API call: ${method} ${endpoint}`);
+  if (body) {
+    console.log('📤 Request body:', JSON.stringify(body, null, 2));
+  }
   
   const response = await fetch(`https://api.telnyx.com/v2/${endpoint}`, {
     method,
@@ -36,12 +39,12 @@ async function telnyxApiCall(endpoint: string, method: string, body?: any) {
 
   if (!response.ok) {
     const error = await response.text();
-    console.error('Telnyx API error:', error);
+    console.error('❌ Telnyx API error:', error);
     throw new Error(`Telnyx API error: ${response.status} - ${error}`);
   }
 
   const result = await response.json();
-  console.log('Telnyx API response:', JSON.stringify(result, null, 2));
+  console.log('📥 Telnyx API response:', JSON.stringify(result, null, 2));
   return result;
 }
 
@@ -50,10 +53,11 @@ async function generateAIResponse(prompt: string, context: any) {
   const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
   
   if (!OPENAI_API_KEY) {
+    console.error('❌ OPENAI_API_KEY not configured');
     throw new Error('OPENAI_API_KEY not configured');
   }
   
-  console.log('Generating AI response for:', prompt);
+  console.log('🤖 Generating AI response for:', prompt.substring(0, 100) + '...');
   
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -96,13 +100,13 @@ Respond naturally to what the person just said. Keep it brief and conversational
 
   if (!response.ok) {
     const error = await response.text();
-    console.error('OpenAI API error:', error);
+    console.error('❌ OpenAI API error:', error);
     throw new Error(`OpenAI API error: ${error}`);
   }
 
   const data = await response.json();
   const aiResponse = data.choices[0].message.content;
-  console.log('AI generated response:', aiResponse);
+  console.log('✅ AI generated response:', aiResponse);
   return aiResponse;
 }
 
@@ -126,12 +130,19 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    console.log('=== TELNYX WEBHOOK RECEIVED ===');
+    console.log('Method:', req.method);
+    console.log('URL:', req.url);
+    console.log('Headers:', Object.fromEntries(req.headers.entries()));
+
     // Get callId from URL parameters
     const url = new URL(req.url);
     const callId = url.searchParams.get('callId');
     
+    console.log('📞 Call ID:', callId);
+
     if (!callId) {
-      console.error('Missing callId in webhook URL');
+      console.error('❌ Missing callId in webhook URL');
       return new Response('Missing callId', {
         status: 400,
         headers: corsHeaders
@@ -140,7 +151,7 @@ Deno.serve(async (req: Request) => {
 
     // Handle test requests
     if (callId?.startsWith('test-')) {
-      console.log('Test request to webhook');
+      console.log('🧪 Test request to webhook');
       return new Response('Test OK - Telnyx webhook is accessible', {
         headers: corsHeaders
       });
@@ -151,13 +162,12 @@ Deno.serve(async (req: Request) => {
     const eventType = webhookData.data?.event_type;
     const payload = webhookData.data?.payload;
 
-    console.log('=== WEBHOOK EVENT ===');
-    console.log('Event Type:', eventType);
-    console.log('Call ID:', callId);
-    console.log('Payload:', JSON.stringify(payload, null, 2));
+    console.log('=== WEBHOOK EVENT DETAILS ===');
+    console.log('🎯 Event Type:', eventType);
+    console.log('📦 Full Payload:', JSON.stringify(webhookData, null, 2));
 
     if (!eventType || !payload) {
-      console.error('Invalid webhook payload');
+      console.error('❌ Invalid webhook payload - missing event_type or payload');
       return new Response('Invalid payload', {
         status: 400,
         headers: corsHeaders
@@ -172,19 +182,26 @@ Deno.serve(async (req: Request) => {
       .single();
 
     if (fetchError || !currentCall) {
-      console.error('Call record not found:', fetchError);
+      console.error('❌ Call record not found:', fetchError);
       return new Response('Call record not found', {
         status: 404,
         headers: corsHeaders
       });
     }
 
+    console.log('📋 Found call record:', {
+      id: currentCall.id,
+      recipient_name: currentCall.recipient_name,
+      call_goal: currentCall.call_goal,
+      status: currentCall.status
+    });
+
     const callControlId = payload.call_control_id;
     let updateData: any = {};
 
     switch (eventType) {
       case 'call.initiated':
-        console.log('📞 Call initiated');
+        console.log('📞 Call initiated event');
         updateData.status = 'dialing';
         break;
 
@@ -201,40 +218,52 @@ Deno.serve(async (req: Request) => {
           turnCount: 0
         });
 
-        // Start the conversation with initial greeting and immediate gather
+        // Start the conversation with initial greeting
         const initialMessage = `Hello, this is an AI assistant calling on behalf of my client regarding ${currentCall.call_goal.toLowerCase()}. Am I speaking with ${currentCall.recipient_name}?`;
         
-        console.log('🎤 Starting conversation with gather_using_speak');
+        console.log('🎤 Starting conversation with initial message');
         
-        // Use gather_using_speak to speak and listen in one command
-        await telnyxApiCall(`calls/${callControlId}/actions/gather_using_speak`, 'POST', {
-          speak: {
+        try {
+          // Use simple speak command first, then gather
+          await telnyxApiCall(`calls/${callControlId}/actions/speak`, 'POST', {
             payload: initialMessage,
             voice: 'Polly.Joanna-Neural',
             language: 'en-US'
-          },
-          gather: {
+          });
+
+          // Add initial message to transcript
+          const state = conversationState.get(callId);
+          if (state) {
+            state.transcript.push({ speaker: 'assistant', text: initialMessage });
+          }
+        } catch (error) {
+          console.error('❌ Error starting conversation:', error);
+        }
+        
+        break;
+
+      case 'call.speak.ended':
+        console.log('🗣️ Speak ended - starting gather');
+        
+        try {
+          // After speaking, start gathering user response
+          await telnyxApiCall(`calls/${callControlId}/actions/gather`, 'POST', {
             input: ['speech'],
             speech_timeout_millis: 5000,
             speech_end_silence_timeout_millis: 2000,
             speech_language: 'en-US',
             speech_model: 'default'
-          }
-        });
-
-        // Add initial message to transcript
-        const state = conversationState.get(callId);
-        if (state) {
-          state.transcript.push({ speaker: 'assistant', text: initialMessage });
+          });
+        } catch (error) {
+          console.error('❌ Error starting gather:', error);
         }
-        
         break;
 
       case 'call.gather.ended':
         console.log('🎯 Gather ended - processing user response');
         
         const gatherResult = payload.result;
-        console.log('Gather result:', JSON.stringify(gatherResult, null, 2));
+        console.log('📊 Gather result:', JSON.stringify(gatherResult, null, 2));
         
         if (gatherResult && gatherResult.speech) {
           const userInput = gatherResult.speech;
@@ -259,15 +288,6 @@ Deno.serve(async (req: Request) => {
                 language: 'en-US'
               });
               
-              // Hang up after speaking
-              setTimeout(async () => {
-                try {
-                  await telnyxApiCall(`calls/${callControlId}/actions/hangup`, 'POST', {});
-                } catch (error) {
-                  console.error('Error hanging up:', error);
-                }
-              }, 3000);
-              
               state.transcript.push({ speaker: 'assistant', text: farewell });
               
               // Update transcript in database
@@ -290,22 +310,11 @@ Deno.serve(async (req: Request) => {
                 .map(t => `${t.speaker === 'user' ? 'Person' : 'Assistant'}: ${t.text}`)
                 .join('\n');
               
-              // Continue conversation with gather_using_speak
-              console.log('🔄 Continuing conversation with gather_using_speak');
-              
-              await telnyxApiCall(`calls/${callControlId}/actions/gather_using_speak`, 'POST', {
-                speak: {
-                  payload: aiResponse,
-                  voice: 'Polly.Joanna-Neural',
-                  language: 'en-US'
-                },
-                gather: {
-                  input: ['speech'],
-                  speech_timeout_millis: 5000,
-                  speech_end_silence_timeout_millis: 2000,
-                  speech_language: 'en-US',
-                  speech_model: 'default'
-                }
+              // Speak the AI response
+              await telnyxApiCall(`calls/${callControlId}/actions/speak`, 'POST', {
+                payload: aiResponse,
+                voice: 'Polly.Joanna-Neural',
+                language: 'en-US'
               });
               
             } catch (error) {
@@ -314,19 +323,10 @@ Deno.serve(async (req: Request) => {
               // Fallback response
               const fallbackResponse = "I apologize, I'm having a technical issue. Could you please repeat that?";
               
-              await telnyxApiCall(`calls/${callControlId}/actions/gather_using_speak`, 'POST', {
-                speak: {
-                  payload: fallbackResponse,
-                  voice: 'Polly.Joanna-Neural',
-                  language: 'en-US'
-                },
-                gather: {
-                  input: ['speech'],
-                  speech_timeout_millis: 5000,
-                  speech_end_silence_timeout_millis: 2000,
-                  speech_language: 'en-US',
-                  speech_model: 'default'
-                }
+              await telnyxApiCall(`calls/${callControlId}/actions/speak`, 'POST', {
+                payload: fallbackResponse,
+                voice: 'Polly.Joanna-Neural',
+                language: 'en-US'
               });
               
               if (state) {
@@ -337,19 +337,10 @@ Deno.serve(async (req: Request) => {
         } else {
           console.log('⚠️ No speech detected, asking user to repeat');
           
-          await telnyxApiCall(`calls/${callControlId}/actions/gather_using_speak`, 'POST', {
-            speak: {
-              payload: "I didn't catch that. Could you please repeat?",
-              voice: 'Polly.Joanna-Neural',
-              language: 'en-US'
-            },
-            gather: {
-              input: ['speech'],
-              speech_timeout_millis: 5000,
-              speech_end_silence_timeout_millis: 2000,
-              speech_language: 'en-US',
-              speech_model: 'default'
-            }
+          await telnyxApiCall(`calls/${callControlId}/actions/speak`, 'POST', {
+            payload: "I didn't catch that. Could you please repeat?",
+            voice: 'Polly.Joanna-Neural',
+            language: 'en-US'
           });
         }
         break;
@@ -369,7 +360,7 @@ Deno.serve(async (req: Request) => {
         // Clean up conversation state
         conversationState.delete(callId);
         
-        console.log('Call ended:', payload.hangup_cause, 'Duration:', duration);
+        console.log('📊 Call ended:', payload.hangup_cause, 'Duration:', duration);
         break;
 
       case 'call.machine.detection.ended':
@@ -383,13 +374,9 @@ Deno.serve(async (req: Request) => {
         }
         break;
 
-      case 'call.speak.ended':
-        console.log('🗣️ Speak ended - this should not happen with gather_using_speak');
-        // This shouldn't happen when using gather_using_speak, but just in case
-        break;
-
       default:
         console.log('❓ Unhandled event type:', eventType);
+        console.log('📦 Full event data:', JSON.stringify(webhookData, null, 2));
         break;
     }
 
@@ -407,6 +394,8 @@ Deno.serve(async (req: Request) => {
           status: 500,
           headers: corsHeaders
         });
+      } else {
+        console.log('✅ Database updated successfully');
       }
     }
 
@@ -417,6 +406,7 @@ Deno.serve(async (req: Request) => {
 
   } catch (error) {
     console.error('💥 Telnyx webhook error:', error);
+    console.error('Stack trace:', error.stack);
     return new Response('Error', {
       status: 500,
       headers: corsHeaders

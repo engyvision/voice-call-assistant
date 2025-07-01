@@ -44,6 +44,15 @@ Deno.serve(async (req: Request) => {
     const TELNYX_CONNECTION_ID = Deno.env.get('TELNYX_CONNECTION_ID');
     const TELNYX_PHONE_NUMBER = Deno.env.get('TELNYX_PHONE_NUMBER');
 
+    console.log('=== TELNYX INITIATE DEBUG ===');
+    console.log('Environment check:', {
+      TELNYX_API_KEY: !!TELNYX_API_KEY,
+      TELNYX_CONNECTION_ID: !!TELNYX_CONNECTION_ID,
+      TELNYX_PHONE_NUMBER: !!TELNYX_PHONE_NUMBER,
+      SUPABASE_URL: !!Deno.env.get('SUPABASE_URL'),
+      SUPABASE_SERVICE_ROLE_KEY: !!Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+    });
+
     // Validate Telnyx configuration
     if (!TELNYX_API_KEY || !TELNYX_CONNECTION_ID || !TELNYX_PHONE_NUMBER) {
       console.error('Missing Telnyx credentials:', {
@@ -63,7 +72,12 @@ Deno.serve(async (req: Request) => {
 
     const { callId, phoneNumber, recipientName, callGoal, additionalContext } = await req.json();
 
-    console.log('Initiating Telnyx call for:', { callId, phoneNumber, recipientName });
+    console.log('Initiating Telnyx call:', { 
+      callId, 
+      phoneNumber, 
+      recipientName,
+      callGoal: callGoal?.substring(0, 50) + '...'
+    });
 
     // Initialize Supabase client
     const supabase = createClient(
@@ -75,11 +89,11 @@ Deno.serve(async (req: Request) => {
     const targetCountry = getCountryFromPhoneNumber(phoneNumber);
     console.log('Target country detected:', targetCountry);
 
-    // Create Telnyx call with proper webhook URLs
+    // Create Telnyx call with simplified configuration
     const telnyxUrl = 'https://api.telnyx.com/v2/calls';
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     
-    // Enhanced call payload with machine detection and proper webhook configuration
+    // Simplified call payload - remove machine detection for now to avoid issues
     const callPayload = {
       connection_id: TELNYX_CONNECTION_ID,
       to: phoneNumber,
@@ -87,19 +101,11 @@ Deno.serve(async (req: Request) => {
       webhook_url: `${supabaseUrl}/functions/v1/telnyx-webhook?callId=${callId}`,
       webhook_url_method: 'POST',
       timeout_secs: 30,
-      // Enable machine detection to avoid talking to voicemail
-      answering_machine_detection: 'premium',
-      answering_machine_detection_config: {
-        total_analysis_time_millis: 4000,
-        after_greeting_silence_millis: 800,
-        greeting_duration_millis: 3000,
-        initial_silence_millis: 3500,
-        maximum_number_of_words: 6,
-        silence_threshold: 256
-      }
+      // Disable machine detection for now to ensure calls go through
+      answering_machine_detection: 'disabled'
     };
 
-    console.log('Telnyx call payload:', callPayload);
+    console.log('Telnyx call payload:', JSON.stringify(callPayload, null, 2));
 
     // Make the API call to Telnyx
     const response = await fetch(telnyxUrl, {
@@ -115,7 +121,7 @@ Deno.serve(async (req: Request) => {
     console.log('Telnyx API response:', {
       status: response.status,
       ok: response.ok,
-      data: responseData
+      data: JSON.stringify(responseData, null, 2)
     });
 
     if (!response.ok) {
@@ -155,18 +161,26 @@ Deno.serve(async (req: Request) => {
 
     // Extract call control ID from response
     const telnyxCallId = responseData.data.call_control_id;
-    console.log('Call initiated successfully:', telnyxCallId);
+    console.log('✅ Call initiated successfully:', telnyxCallId);
 
     // Update call record with Telnyx call ID
     const { error: updateError } = await supabase
       .from('call_records')
       .update({ 
-        status: 'dialing'
+        status: 'dialing',
+        additional_context: JSON.stringify({
+          originalContext: additionalContext || '',
+          telnyxCallId: telnyxCallId,
+          recipientName: recipientName,
+          callGoal: callGoal
+        })
       })
       .eq('id', callId);
 
     if (updateError) {
       console.error('Failed to update call record:', updateError);
+    } else {
+      console.log('✅ Updated call record with Telnyx call ID');
     }
 
     return new Response(JSON.stringify({ 
@@ -179,7 +193,7 @@ Deno.serve(async (req: Request) => {
     });
 
   } catch (error) {
-    console.error('Telnyx initiate error:', error);
+    console.error('💥 Telnyx initiate error:', error);
     return new Response(JSON.stringify({ 
       success: false, 
       error: error.message || 'Failed to initiate call'
